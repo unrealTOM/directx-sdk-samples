@@ -197,7 +197,6 @@ __declspec(align(16)) struct SortCB
 // Constant Buffers
 ID3D11Buffer*                       g_pcbSimulationConstants = nullptr;
 ID3D11Buffer*                       g_pcbRenderConstants = nullptr;
-ID3D11Buffer*                       g_pSortCB = nullptr;
 
 //--------------------------------------------------------------------------------------
 // UI control IDs
@@ -503,7 +502,7 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
         // Arrange the particles in a nice square
         UINT x = i % iStartingWidth;
         UINT y = i / iStartingWidth;
-        particles[ i ].vPosition = XMFLOAT2( g_fInitialParticleSpacing * (FLOAT)x, g_fInitialParticleSpacing * (FLOAT)y );
+        particles[i].vPosition = XMFLOAT2( g_fInitialParticleSpacing * (FLOAT)x, g_fInitialParticleSpacing * (FLOAT)y );
 		particles[i].fTTL = g_fParticleMaxTTL;
     }
 
@@ -599,11 +598,8 @@ HRESULT CALLBACK OnD3D11CreateDevice( ID3D11Device* pd3dDevice, const DXGI_SURFA
     V_RETURN( CreateConstantBuffer< CBSimulationConstants >( pd3dDevice, &g_pcbSimulationConstants ) );
     V_RETURN( CreateConstantBuffer< CBRenderConstants >( pd3dDevice, &g_pcbRenderConstants ) );
 
-    V_RETURN( CreateConstantBuffer< SortCB >( pd3dDevice, &g_pSortCB ) );
-
     DXUT_SetDebugName( g_pcbSimulationConstants, "Simluation" );
     DXUT_SetDebugName( g_pcbRenderConstants, "Render" );
-    DXUT_SetDebugName( g_pSortCB, "Sort" );
 
     return S_OK;
 }
@@ -654,7 +650,7 @@ void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
     pd3dImmediateContext->CopyResource( g_pSortedParticles, g_pParticles );
     pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pSortedParticlesSRV );
     pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticlesUAV, &UAVInitialCounts );
-	pd3dImmediateContext->CSSetUnorderedAccessViews(1, 1, &g_pEmitterUAV, &UAVInitialCounts);
+	pd3dImmediateContext->CSSetUnorderedAccessViews( 1, 1, &g_pEmitterUAV, &UAVInitialCounts );
 	pd3dImmediateContext->CSSetShaderResources( 2, 1, &g_pParticleForcesSRV );
     pd3dImmediateContext->CSSetShader( g_pIntegrateCS, nullptr, 0 );
     pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
@@ -704,11 +700,10 @@ void SimulateFluid( ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTim
 
     // Unset
     pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pNullUAV, &UAVInitialCounts );
-    pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pNullSRV );
+	pd3dImmediateContext->CSSetUnorderedAccessViews( 1, 1, &g_pNullUAV, &UAVInitialCounts );
+	pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pNullSRV );
     pd3dImmediateContext->CSSetShaderResources( 1, 1, &g_pNullSRV );
     pd3dImmediateContext->CSSetShaderResources( 2, 1, &g_pNullSRV );
-    pd3dImmediateContext->CSSetShaderResources( 3, 1, &g_pNullSRV );
-    pd3dImmediateContext->CSSetShaderResources( 4, 1, &g_pNullSRV );
 }
 
 
@@ -808,7 +803,6 @@ void CALLBACK OnD3D11DestroyDevice( void* pUserContext )
 
     SAFE_RELEASE( g_pcbSimulationConstants );
     SAFE_RELEASE( g_pcbRenderConstants );
-    SAFE_RELEASE( g_pSortCB );
 
     SAFE_RELEASE( g_pParticleVS );
     SAFE_RELEASE( g_pParticleGS );

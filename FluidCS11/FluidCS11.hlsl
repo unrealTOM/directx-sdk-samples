@@ -264,13 +264,11 @@ void IntegrateCS( uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint
 		ParticlesRW[P_ID].velocity = velocity;
 		ParticlesRW[P_ID].ttl -= g_fTimeStep;
 	}
-	else
+
+	if (ParticlesRW[P_ID].ttl <= 0)
 	{
 		//particle is dead, add new ones if possible
 		unsigned int x = EmitterRW.IncrementCounter();
-
-		ParticlesRW[P_ID].position = EmitterRW[x].position;
-		ParticlesRW[P_ID].velocity = EmitterRW[x].velocity;
-		ParticlesRW[P_ID].ttl = EmitterRW[x].ttl;
+		ParticlesRW[P_ID] = EmitterRW[P_ID];
 	}
 }
