@@ -79,7 +79,7 @@ UINT g_iNumParticles = NUM_PARTICLES_16K;
 // Particle Properties
 // These will control how the fluid behaves
 FLOAT g_fInitialParticleSpacing = 0.0045f;
-FLOAT g_fParticleMaxTTL = 3.0f;
+FLOAT g_fParticleMaxTTL = 2.0f;
 FLOAT g_fSmoothlen = 0.012f;
 FLOAT g_fPressureStiffness = 200.0f;
 FLOAT g_fRestDensity = 1000.0f;
@@ -132,16 +132,8 @@ ID3D11VertexShader*                 g_pParticleVS = nullptr;
 ID3D11GeometryShader*               g_pParticleGS = nullptr;
 ID3D11PixelShader*                  g_pParticlePS = nullptr;
 
-ID3D11ComputeShader*                g_pBuildGridCS = nullptr;
-ID3D11ComputeShader*                g_pClearGridIndicesCS = nullptr;
-ID3D11ComputeShader*                g_pBuildGridIndicesCS = nullptr;
-ID3D11ComputeShader*                g_pRearrangeParticlesCS = nullptr;
 ID3D11ComputeShader*                g_pDensity_SimpleCS = nullptr;
 ID3D11ComputeShader*                g_pForce_SimpleCS = nullptr;
-ID3D11ComputeShader*                g_pDensity_SharedCS = nullptr;
-ID3D11ComputeShader*                g_pForce_SharedCS = nullptr;
-ID3D11ComputeShader*                g_pDensity_GridCS = nullptr;
-ID3D11ComputeShader*                g_pForce_GridCS = nullptr;
 ID3D11ComputeShader*                g_pIntegrateCS = nullptr;
 
 // Structured Buffers
@@ -637,46 +629,6 @@ HRESULT CALLBACK OnD3D11CreateDevice( ID3D11Device* pd3dDevice, const DXGI_SURFA
     SAFE_RELEASE( pBlob );
     DXUT_SetDebugName( g_pForce_SimpleCS, "ForceCS_Simple" );
 
-    V_RETURN( DXUTCompileFromFile( L"FluidCS11.hlsl", nullptr, "DensityCS_Shared", CSTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob ) );
-    V_RETURN( pd3dDevice->CreateComputeShader( pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pDensity_SharedCS ) );
-    SAFE_RELEASE( pBlob );
-    DXUT_SetDebugName( g_pDensity_SharedCS, "DensityCS_Shared" );
-
-    V_RETURN( DXUTCompileFromFile( L"FluidCS11.hlsl", nullptr, "ForceCS_Shared", CSTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob ) );
-    V_RETURN( pd3dDevice->CreateComputeShader( pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pForce_SharedCS ) );
-    SAFE_RELEASE( pBlob );
-    DXUT_SetDebugName( g_pForce_SharedCS, "ForceCS_Shared" );
-
-    V_RETURN( DXUTCompileFromFile( L"FluidCS11.hlsl", nullptr, "DensityCS_Grid", CSTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob ) );
-    V_RETURN( pd3dDevice->CreateComputeShader( pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pDensity_GridCS ) );
-    SAFE_RELEASE( pBlob );
-    DXUT_SetDebugName( g_pDensity_GridCS, "DensityCS_Grid" );
-
-    V_RETURN( DXUTCompileFromFile( L"FluidCS11.hlsl", nullptr, "ForceCS_Grid", CSTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob ) );
-    V_RETURN( pd3dDevice->CreateComputeShader( pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pForce_GridCS ) );
-    SAFE_RELEASE( pBlob );
-    DXUT_SetDebugName( g_pForce_GridCS, "ForceCS_Grid" );
-
-    V_RETURN( DXUTCompileFromFile( L"FluidCS11.hlsl", nullptr, "BuildGridCS", CSTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob ) );
-    V_RETURN( pd3dDevice->CreateComputeShader( pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pBuildGridCS ) );
-    SAFE_RELEASE( pBlob );
-    DXUT_SetDebugName( g_pBuildGridCS, "BuildGridCS" );
-
-    V_RETURN( DXUTCompileFromFile( L"FluidCS11.hlsl", nullptr, "ClearGridIndicesCS", CSTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob ) );
-    V_RETURN( pd3dDevice->CreateComputeShader( pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pClearGridIndicesCS ) );
-    SAFE_RELEASE( pBlob );
-    DXUT_SetDebugName( g_pClearGridIndicesCS, "ClearGridIndicesCS" );
-
-    V_RETURN( DXUTCompileFromFile( L"FluidCS11.hlsl", nullptr, "BuildGridIndicesCS", CSTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob ) );
-    V_RETURN( pd3dDevice->CreateComputeShader( pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pBuildGridIndicesCS ) );
-    SAFE_RELEASE( pBlob );
-    DXUT_SetDebugName( g_pBuildGridIndicesCS, "BuildGridIndicesCS" );
-
-    V_RETURN( DXUTCompileFromFile( L"FluidCS11.hlsl", nullptr, "RearrangeParticlesCS", CSTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob ) );
-    V_RETURN( pd3dDevice->CreateComputeShader( pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pRearrangeParticlesCS ) );
-    SAFE_RELEASE( pBlob );
-    DXUT_SetDebugName( g_pRearrangeParticlesCS, "RearrangeParticlesCS" );
-
     CompilingShadersDlg.DestroyDialog();
 
     // Create the Simulation Buffers
@@ -904,14 +856,6 @@ void CALLBACK OnD3D11DestroyDevice( void* pUserContext )
     SAFE_RELEASE( g_pIntegrateCS );
     SAFE_RELEASE( g_pDensity_SimpleCS );
     SAFE_RELEASE( g_pForce_SimpleCS );
-    SAFE_RELEASE( g_pDensity_SharedCS );
-    SAFE_RELEASE( g_pForce_SharedCS );
-    SAFE_RELEASE( g_pDensity_GridCS );
-    SAFE_RELEASE( g_pForce_GridCS );
-    SAFE_RELEASE( g_pBuildGridCS );
-    SAFE_RELEASE( g_pClearGridIndicesCS );
-    SAFE_RELEASE( g_pBuildGridIndicesCS );
-    SAFE_RELEASE( g_pRearrangeParticlesCS );
 
     SAFE_RELEASE( g_pParticles );
     SAFE_RELEASE( g_pParticlesSRV );
