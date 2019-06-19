@@ -79,7 +79,7 @@ UINT g_iNumParticles = NUM_PARTICLES_16K;
 // Particle Properties
 // These will control how the fluid behaves
 FLOAT g_fInitialParticleSpacing = 0.0045f;
-FLOAT g_fParticleMaxTTL = 5.0f;
+FLOAT g_fParticleMaxTTL = 3.0f;
 FLOAT g_fSmoothlen = 0.012f;
 FLOAT g_fPressureStiffness = 200.0f;
 FLOAT g_fRestDensity = 1000.0f;
@@ -149,6 +149,10 @@ ID3D11Buffer*                       g_pParticles = nullptr;
 ID3D11ShaderResourceView*           g_pParticlesSRV = nullptr;
 ID3D11UnorderedAccessView*          g_pParticlesUAV = nullptr;
 
+ID3D11Buffer*                       g_pEmitter = nullptr;
+ID3D11ShaderResourceView*           g_pEmitterSRV = nullptr;
+ID3D11UnorderedAccessView*          g_pEmitterUAV = nullptr;
+
 ID3D11Buffer*                       g_pSortedParticles = nullptr;
 ID3D11ShaderResourceView*           g_pSortedParticlesSRV = nullptr;
 ID3D11UnorderedAccessView*          g_pSortedParticlesUAV = nullptr;
@@ -179,6 +183,7 @@ ID3D11UnorderedAccessView*          g_pGridIndicesUAV = nullptr;
 __declspec(align(16)) struct CBSimulationConstants
 {
     UINT iNumParticles;
+	FLOAT fParticleMaxTTL;
     FLOAT fTimeStep;
     FLOAT fSmoothlen;
     FLOAT fPressureStiffness;
@@ -437,7 +442,13 @@ HRESULT CreateConstantBuffer(ID3D11Device* pd3dDevice, ID3D11Buffer** ppCB)
 // Helper for creating structured buffers with an SRV and UAV
 //--------------------------------------------------------------------------------------
 template <class T>
-HRESULT CreateStructuredBuffer(ID3D11Device* pd3dDevice, UINT iNumElements, ID3D11Buffer** ppBuffer, ID3D11ShaderResourceView** ppSRV, ID3D11UnorderedAccessView** ppUAV, const T* pInitialData = nullptr)
+HRESULT CreateStructuredBuffer(
+	ID3D11Device* pd3dDevice, UINT iNumElements, 
+	ID3D11Buffer** ppBuffer, 
+	ID3D11ShaderResourceView** ppSRV, 
+	ID3D11UnorderedAccessView** ppUAV, 
+	const T* pInitialData = nullptr,
+	UINT flag = D3D11_BUFFER_UAV_FLAG_RAW)
 {
     HRESULT hr = S_OK;
 
@@ -465,6 +476,8 @@ HRESULT CreateStructuredBuffer(ID3D11Device* pd3dDevice, UINT iNumElements, ID3D
     uavDesc.Format = DXGI_FORMAT_UNKNOWN;
     uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
     uavDesc.Buffer.NumElements = iNumElements;
+	if (flag != D3D11_BUFFER_UAV_FLAG_RAW)
+		uavDesc.Buffer.Flags = flag;
     V_RETURN( pd3dDevice->CreateUnorderedAccessView( *ppBuffer, &uavDesc, ppUAV ) );
 
     return hr;
@@ -482,7 +495,11 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
     SAFE_RELEASE( g_pParticles );
     SAFE_RELEASE( g_pParticlesSRV );
     SAFE_RELEASE( g_pParticlesUAV );
-    
+
+	SAFE_RELEASE(g_pEmitter);
+	SAFE_RELEASE(g_pEmitterSRV);
+	SAFE_RELEASE(g_pEmitterUAV);
+
     SAFE_RELEASE( g_pSortedParticles );
     SAFE_RELEASE( g_pSortedParticlesSRV );
     SAFE_RELEASE( g_pSortedParticlesUAV );
@@ -527,6 +544,11 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
     DXUT_SetDebugName( g_pParticles, "Particles" );
     DXUT_SetDebugName( g_pParticlesSRV, "Particles SRV" );
     DXUT_SetDebugName( g_pParticlesUAV, "Particles UAV" );
+
+	V_RETURN(CreateStructuredBuffer< Particle >(pd3dDevice, g_iNumParticles, &g_pEmitter, &g_pEmitterSRV, &g_pEmitterUAV, particles.get()), D3D11_BUFFER_UAV_FLAG_COUNTER);
+	DXUT_SetDebugName(g_pEmitter, "Emitter");
+	DXUT_SetDebugName(g_pEmitterSRV, "Emitter SRV");
+	DXUT_SetDebugName(g_pEmitterUAV, "Emitter UAV");
 
     V_RETURN( CreateStructuredBuffer< Particle >( pd3dDevice, g_iNumParticles, &g_pSortedParticles, &g_pSortedParticlesSRV, &g_pSortedParticlesUAV, particles.get()) );
     DXUT_SetDebugName( g_pSortedParticles, "Sorted" );
@@ -719,7 +741,8 @@ void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
     pd3dImmediateContext->CopyResource( g_pSortedParticles, g_pParticles );
     pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pSortedParticlesSRV );
     pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticlesUAV, &UAVInitialCounts );
-    pd3dImmediateContext->CSSetShaderResources( 2, 1, &g_pParticleForcesSRV );
+	pd3dImmediateContext->CSSetUnorderedAccessViews(1, 1, &g_pEmitterUAV, &UAVInitialCounts);
+	pd3dImmediateContext->CSSetShaderResources( 2, 1, &g_pParticleForcesSRV );
     pd3dImmediateContext->CSSetShader( g_pIntegrateCS, nullptr, 0 );
     pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
 }
@@ -737,6 +760,7 @@ void SimulateFluid( ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTim
     // Simulation Constants
     pData.iNumParticles = g_iNumParticles;
     // Clamp the time step when the simulation runs slowly to prevent numerical explosion
+	pData.fParticleMaxTTL = g_fParticleMaxTTL;
     pData.fTimeStep = std::min( g_fMaxAllowableTimeStep, fElapsedTime );
     pData.fSmoothlen = g_fSmoothlen;
     pData.fPressureStiffness = g_fPressureStiffness;
@@ -892,7 +916,11 @@ void CALLBACK OnD3D11DestroyDevice( void* pUserContext )
     SAFE_RELEASE( g_pParticles );
     SAFE_RELEASE( g_pParticlesSRV );
     SAFE_RELEASE( g_pParticlesUAV );
-    
+
+	SAFE_RELEASE(g_pEmitter);
+	SAFE_RELEASE(g_pEmitterSRV);
+	SAFE_RELEASE(g_pEmitterUAV);
+
     SAFE_RELEASE( g_pSortedParticles );
     SAFE_RELEASE( g_pSortedParticlesSRV );
     SAFE_RELEASE( g_pSortedParticlesUAV );

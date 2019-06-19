@@ -36,6 +36,7 @@ struct ParticleDensity
 cbuffer cbSimulationConstants : register( b0 )
 {
     uint g_iNumParticles;
+	float g_fParticleMaxTTL;
     float g_fTimeStep;
     float g_fSmoothlen;
     float g_fPressureStiffness;
@@ -60,6 +61,7 @@ cbuffer cbSimulationConstants : register( b0 )
 // Structured Buffers
 //--------------------------------------------------------------------------------------
 RWStructuredBuffer<Particle> ParticlesRW : register( u0 );
+RWStructuredBuffer<Particle> EmitterRW : register( u1 );
 StructuredBuffer<Particle> ParticlesRO : register( t0 );
 
 RWStructuredBuffer<ParticleDensity> ParticlesDensityRW : register( u0 );
@@ -522,8 +524,20 @@ void IntegrateCS( uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint
     velocity += g_fTimeStep * acceleration;
     position += g_fTimeStep * velocity;
     
-    // Update
-    ParticlesRW[P_ID].position = position;
-    ParticlesRW[P_ID].velocity = velocity;
-	ParticlesRW[P_ID].ttl -= g_fTimeStep;
+	if (ParticlesRW[P_ID].ttl > 0)
+	{
+		// Update
+		ParticlesRW[P_ID].position = position;
+		ParticlesRW[P_ID].velocity = velocity;
+		ParticlesRW[P_ID].ttl -= g_fTimeStep;
+	}
+	else
+	{
+		//particle is dead, add new ones if possible
+		unsigned int x = EmitterRW.IncrementCounter();
+
+		ParticlesRW[P_ID].position = EmitterRW[x].position;
+		ParticlesRW[P_ID].velocity = EmitterRW[x].velocity;
+		ParticlesRW[P_ID].ttl = EmitterRW[x].ttl;
+	}
 }
