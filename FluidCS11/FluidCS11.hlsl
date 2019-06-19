@@ -70,12 +70,6 @@ StructuredBuffer<ParticleDensity> ParticlesDensityRO : register( t1 );
 RWStructuredBuffer<ParticleForces> ParticlesForcesRW : register( u0 );
 StructuredBuffer<ParticleForces> ParticlesForcesRO : register( t2 );
 
-RWStructuredBuffer<unsigned int> GridRW : register( u0 );
-StructuredBuffer<unsigned int> GridRO : register( t3 );
-
-RWStructuredBuffer<uint2> GridIndicesRW : register( u0 );
-StructuredBuffer<uint2> GridIndicesRO : register( t4 );
-
 
 //--------------------------------------------------------------------------------------
 // Grid Construction

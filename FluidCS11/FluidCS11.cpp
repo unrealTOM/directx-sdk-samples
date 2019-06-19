@@ -157,18 +157,6 @@ ID3D11Buffer*                       g_pParticleForces = nullptr;
 ID3D11ShaderResourceView*           g_pParticleForcesSRV = nullptr;
 ID3D11UnorderedAccessView*          g_pParticleForcesUAV = nullptr;
 
-ID3D11Buffer*                       g_pGrid = nullptr;
-ID3D11ShaderResourceView*           g_pGridSRV = nullptr;
-ID3D11UnorderedAccessView*          g_pGridUAV = nullptr;
-
-ID3D11Buffer*                       g_pGridPingPong = nullptr;
-ID3D11ShaderResourceView*           g_pGridPingPongSRV = nullptr;
-ID3D11UnorderedAccessView*          g_pGridPingPongUAV = nullptr;
-
-ID3D11Buffer*                       g_pGridIndices = nullptr;
-ID3D11ShaderResourceView*           g_pGridIndicesSRV = nullptr;
-ID3D11UnorderedAccessView*          g_pGridIndicesUAV = nullptr;
-
 // Constant Buffer Layout
 #pragma warning(push)
 #pragma warning(disable:4324) // structure was padded due to __declspec(align())
@@ -504,18 +492,6 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
     SAFE_RELEASE( g_pParticleDensitySRV );
     SAFE_RELEASE( g_pParticleDensityUAV );
 
-    SAFE_RELEASE( g_pGridSRV );
-    SAFE_RELEASE( g_pGridUAV );
-    SAFE_RELEASE( g_pGrid );
-
-    SAFE_RELEASE( g_pGridPingPongSRV );
-    SAFE_RELEASE( g_pGridPingPongUAV );
-    SAFE_RELEASE( g_pGridPingPong );
-
-    SAFE_RELEASE( g_pGridIndicesSRV );
-    SAFE_RELEASE( g_pGridIndicesUAV );
-    SAFE_RELEASE( g_pGridIndices );
-
     // Create the initial particle positions
     // This is only used to populate the GPU buffers on creation
     const UINT iStartingWidth = (UINT)sqrt( (FLOAT)g_iNumParticles );
@@ -556,21 +532,6 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
     DXUT_SetDebugName( g_pParticleDensity, "Density" );
     DXUT_SetDebugName( g_pParticleDensitySRV, "Density SRV" );
     DXUT_SetDebugName( g_pParticleDensityUAV, "Density UAV" );
-
-    V_RETURN( CreateStructuredBuffer< UINT >( pd3dDevice, g_iNumParticles, &g_pGrid, &g_pGridSRV, &g_pGridUAV ) );
-    DXUT_SetDebugName( g_pGrid, "Grid" );
-    DXUT_SetDebugName( g_pGridSRV, "Grid SRV" );
-    DXUT_SetDebugName( g_pGridUAV, "Grid UAV" );
-
-    V_RETURN( CreateStructuredBuffer< UINT >( pd3dDevice, g_iNumParticles, &g_pGridPingPong, &g_pGridPingPongSRV, &g_pGridPingPongUAV ) );
-    DXUT_SetDebugName( g_pGridPingPong, "PingPong" );
-    DXUT_SetDebugName( g_pGridPingPongSRV, "PingPong SRV" );
-    DXUT_SetDebugName( g_pGridPingPongUAV, "PingPong UAV" );
-
-    V_RETURN( CreateStructuredBuffer< UINT2 >( pd3dDevice, NUM_GRID_INDICES, &g_pGridIndices, &g_pGridIndicesSRV, &g_pGridIndicesUAV ) );
-    DXUT_SetDebugName( g_pGridIndices, "Indices" );
-    DXUT_SetDebugName( g_pGridIndicesSRV, "Indices SRV" );
-    DXUT_SetDebugName( g_pGridIndicesUAV, "Indices UAV" );
 
     return S_OK;
 }
@@ -876,16 +837,4 @@ void CALLBACK OnD3D11DestroyDevice( void* pUserContext )
     SAFE_RELEASE( g_pParticleDensity );
     SAFE_RELEASE( g_pParticleDensitySRV );
     SAFE_RELEASE( g_pParticleDensityUAV );
-
-    SAFE_RELEASE( g_pGridSRV );
-    SAFE_RELEASE( g_pGridUAV );
-    SAFE_RELEASE( g_pGrid );
-
-    SAFE_RELEASE( g_pGridPingPongSRV );
-    SAFE_RELEASE( g_pGridPingPongUAV );
-    SAFE_RELEASE( g_pGridPingPong );
-
-    SAFE_RELEASE( g_pGridIndicesSRV );
-    SAFE_RELEASE( g_pGridIndicesUAV );
-    SAFE_RELEASE( g_pGridIndices );
 }
