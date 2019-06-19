@@ -23,9 +23,6 @@
     <None Include="ComputeShaderSort11.hlsl">
       <Filter>Shaders</Filter>
     </None>
-    <None Include="FluidCS11.hlsl">
-      <Filter>Shaders</Filter>
-    </None>
     <None Include="FluidRender.fx">
       <Filter>Shaders</Filter>
     </None>
@@ -39,5 +36,11 @@
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
+    <FxCompile Include="FluidRender.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="FluidCS11.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
   </ItemGroup>
 </Project>

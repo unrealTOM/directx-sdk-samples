@@ -33,6 +33,7 @@ struct Particle
 {
     XMFLOAT2 vPosition;
     XMFLOAT2 vVelocity;
+	FLOAT fTTL;
 };
 
 struct ParticleDensity
@@ -78,6 +79,7 @@ UINT g_iNumParticles = NUM_PARTICLES_16K;
 // Particle Properties
 // These will control how the fluid behaves
 FLOAT g_fInitialParticleSpacing = 0.0045f;
+FLOAT g_fParticleMaxTTL = 5.0f;
 FLOAT g_fSmoothlen = 0.012f;
 FLOAT g_fPressureStiffness = 200.0f;
 FLOAT g_fRestDensity = 1000.0f;
@@ -108,16 +110,6 @@ XMFLOAT3A g_vPlanes[4] = {
     XMFLOAT3A(-1, 0, g_fMapWidth),
     XMFLOAT3A(0, -1, g_fMapHeight)
 };
-
-// Simulation Algorithm
-enum eSimulationMode
-{
-    SIM_MODE_SIMPLE,
-    SIM_MODE_SHARED,
-    SIM_MODE_GRID
-};
-
-eSimulationMode g_eSimMode = SIM_MODE_GRID;
 
 //--------------------------------------------------------------------------------------
 // Direct3D11 Global variables
@@ -151,9 +143,6 @@ ID3D11ComputeShader*                g_pForce_SharedCS = nullptr;
 ID3D11ComputeShader*                g_pDensity_GridCS = nullptr;
 ID3D11ComputeShader*                g_pForce_GridCS = nullptr;
 ID3D11ComputeShader*                g_pIntegrateCS = nullptr;
-
-ID3D11ComputeShader*                g_pSortBitonic = nullptr;
-ID3D11ComputeShader*                g_pSortTranspose = nullptr;
 
 // Structured Buffers
 ID3D11Buffer*                       g_pParticles = nullptr;
@@ -236,9 +225,6 @@ ID3D11Buffer*                       g_pSortCB = nullptr;
 #define IDC_NUMPARTICLES          6
 #define IDC_GRAVITY               7
 #define IDC_SIMMODE               8
-#define IDC_SIMSIMPLE             9
-#define IDC_SIMSHARED             10
-#define IDC_SIMGRID               11
 
 //--------------------------------------------------------------------------------------
 // Forward declarations 
@@ -330,11 +316,6 @@ void InitApp()
     g_SampleUI.GetComboBox( IDC_GRAVITY )->AddItem( L"Gravity Up", (void*)&GRAVITY_UP );
     g_SampleUI.GetComboBox( IDC_GRAVITY )->AddItem( L"Gravity Left", (void*)&GRAVITY_LEFT );
     g_SampleUI.GetComboBox( IDC_GRAVITY )->AddItem( L"Gravity Right", (void*)&GRAVITY_RIGHT );
-
-    g_SampleUI.AddRadioButton( IDC_SIMSIMPLE, IDC_SIMMODE, L"Simple N^2", 0, iY += 26, 150, 22 );
-    g_SampleUI.AddRadioButton( IDC_SIMSHARED, IDC_SIMMODE, L"Shared Memory N^2", 0, iY += 26, 150, 22 );
-    g_SampleUI.AddRadioButton( IDC_SIMGRID, IDC_SIMMODE, L"Grid + Sort", 0, iY += 26, 150, 22 );
-    g_SampleUI.GetRadioButton( IDC_SIMGRID )->SetChecked( true );
 }
 
 
@@ -415,12 +396,6 @@ void CALLBACK OnGUIEvent( UINT nEvent, int nControlID, CDXUTControl* pControl, v
             break;
         case IDC_GRAVITY:
             g_vGravity = *(const XMFLOAT2A*)((CDXUTComboBox*)pControl)->GetSelectedData(); break;
-        case IDC_SIMSIMPLE:
-            g_eSimMode = SIM_MODE_SIMPLE; break;
-        case IDC_SIMSHARED:
-            g_eSimMode = SIM_MODE_SHARED; break;
-        case IDC_SIMGRID:
-            g_eSimMode = SIM_MODE_GRID; break;
     }
 }
 
@@ -544,6 +519,7 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
         UINT x = i % iStartingWidth;
         UINT y = i / iStartingWidth;
         particles[ i ].vPosition = XMFLOAT2( g_fInitialParticleSpacing * (FLOAT)x, g_fInitialParticleSpacing * (FLOAT)y );
+		particles[i].fTTL = g_fParticleMaxTTL;
     }
 
     // Create Structured Buffers
@@ -679,17 +655,6 @@ HRESULT CALLBACK OnD3D11CreateDevice( ID3D11Device* pd3dDevice, const DXGI_SURFA
     SAFE_RELEASE( pBlob );
     DXUT_SetDebugName( g_pRearrangeParticlesCS, "RearrangeParticlesCS" );
 
-    // Sort Shaders
-    V_RETURN( DXUTCompileFromFile( L"ComputeShaderSort11.hlsl", nullptr, "BitonicSort", CSTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob ) );
-    V_RETURN( pd3dDevice->CreateComputeShader( pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pSortBitonic ) );
-    SAFE_RELEASE( pBlob );
-    DXUT_SetDebugName( g_pSortBitonic, "BitonicSort" );
-
-    V_RETURN( DXUTCompileFromFile( L"ComputeShaderSort11.hlsl", nullptr, "MatrixTranspose", CSTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob ) );
-    V_RETURN( pd3dDevice->CreateComputeShader( pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pSortTranspose ) );
-    SAFE_RELEASE( pBlob );
-    DXUT_SetDebugName( g_pSortTranspose, "MatrixTranspose" );
-
     CompilingShadersDlg.DestroyDialog();
 
     // Create the Simulation Buffers
@@ -728,72 +693,6 @@ HRESULT CALLBACK OnD3D11ResizedSwapChain( ID3D11Device* pd3dDevice, IDXGISwapCha
     return S_OK;
 }
 
-
-//--------------------------------------------------------------------------------------
-// GPU Bitonic Sort
-// For more information, please see the ComputeShaderSort11 sample
-//--------------------------------------------------------------------------------------
-void GPUSort(ID3D11DeviceContext* pd3dImmediateContext,
-             ID3D11UnorderedAccessView* inUAV, ID3D11ShaderResourceView* inSRV,
-             ID3D11UnorderedAccessView* tempUAV, ID3D11ShaderResourceView* tempSRV)
-{
-    pd3dImmediateContext->CSSetConstantBuffers( 0, 1, &g_pSortCB );
-
-    const UINT NUM_ELEMENTS = g_iNumParticles;
-    const UINT MATRIX_WIDTH = BITONIC_BLOCK_SIZE;
-    const UINT MATRIX_HEIGHT = NUM_ELEMENTS / BITONIC_BLOCK_SIZE;
-
-    // Sort the data
-    // First sort the rows for the levels <= to the block size
-    for( UINT level = 2 ; level <= BITONIC_BLOCK_SIZE ; level <<= 1 )
-    {
-        SortCB constants = { level, level, MATRIX_HEIGHT, MATRIX_WIDTH };
-        pd3dImmediateContext->UpdateSubresource( g_pSortCB, 0, nullptr, &constants, 0, 0 );
-
-        // Sort the row data
-        UINT UAVInitialCounts = 0;
-        pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &inUAV, &UAVInitialCounts );
-        pd3dImmediateContext->CSSetShader( g_pSortBitonic, nullptr, 0 );
-        pd3dImmediateContext->Dispatch( NUM_ELEMENTS / BITONIC_BLOCK_SIZE, 1, 1 );
-    }
-
-    // Then sort the rows and columns for the levels > than the block size
-    // Transpose. Sort the Columns. Transpose. Sort the Rows.
-    for( UINT level = (BITONIC_BLOCK_SIZE << 1) ; level <= NUM_ELEMENTS ; level <<= 1 )
-    {
-        SortCB constants1 = { (level / BITONIC_BLOCK_SIZE), (level & ~NUM_ELEMENTS) / BITONIC_BLOCK_SIZE, MATRIX_WIDTH, MATRIX_HEIGHT };
-        pd3dImmediateContext->UpdateSubresource( g_pSortCB, 0, nullptr, &constants1, 0, 0 );
-
-        // Transpose the data from buffer 1 into buffer 2
-        ID3D11ShaderResourceView* pViewNULL = nullptr;
-        UINT UAVInitialCounts = 0;
-        pd3dImmediateContext->CSSetShaderResources( 0, 1, &pViewNULL );
-        pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &tempUAV, &UAVInitialCounts );
-        pd3dImmediateContext->CSSetShaderResources( 0, 1, &inSRV );
-        pd3dImmediateContext->CSSetShader( g_pSortTranspose, nullptr, 0 );
-        pd3dImmediateContext->Dispatch( MATRIX_WIDTH / TRANSPOSE_BLOCK_SIZE, MATRIX_HEIGHT / TRANSPOSE_BLOCK_SIZE, 1 );
-
-        // Sort the transposed column data
-        pd3dImmediateContext->CSSetShader( g_pSortBitonic, nullptr, 0 );
-        pd3dImmediateContext->Dispatch( NUM_ELEMENTS / BITONIC_BLOCK_SIZE, 1, 1 );
-
-        SortCB constants2 = { BITONIC_BLOCK_SIZE, level, MATRIX_HEIGHT, MATRIX_WIDTH };
-        pd3dImmediateContext->UpdateSubresource( g_pSortCB, 0, nullptr, &constants2, 0, 0 );
-
-        // Transpose the data from buffer 2 back into buffer 1
-        pd3dImmediateContext->CSSetShaderResources( 0, 1, &pViewNULL );
-        pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &inUAV, &UAVInitialCounts );
-        pd3dImmediateContext->CSSetShaderResources( 0, 1, &tempSRV );
-        pd3dImmediateContext->CSSetShader( g_pSortTranspose, nullptr, 0 );
-        pd3dImmediateContext->Dispatch( MATRIX_HEIGHT / TRANSPOSE_BLOCK_SIZE, MATRIX_WIDTH / TRANSPOSE_BLOCK_SIZE, 1 );
-
-        // Sort the row data
-        pd3dImmediateContext->CSSetShader( g_pSortBitonic, nullptr, 0 );
-        pd3dImmediateContext->Dispatch( NUM_ELEMENTS / BITONIC_BLOCK_SIZE, 1, 1 );
-    }
-}
-
-
 //--------------------------------------------------------------------------------------
 // GPU Fluid Simulation - Simple N^2 Algorithm
 //--------------------------------------------------------------------------------------
@@ -824,112 +723,6 @@ void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
     pd3dImmediateContext->CSSetShader( g_pIntegrateCS, nullptr, 0 );
     pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
 }
-
-
-//--------------------------------------------------------------------------------------
-// GPU Fluid Simulation - Optimized N^2 Algorithm using Shared Memory
-//--------------------------------------------------------------------------------------
-void SimulateFluid_Shared( ID3D11DeviceContext* pd3dImmediateContext )
-{
-    UINT UAVInitialCounts = 0;
-
-    // Setup
-    pd3dImmediateContext->CSSetConstantBuffers( 0, 1, &g_pcbSimulationConstants );
-    pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pParticlesSRV );
-
-    // Density
-    pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticleDensityUAV, &UAVInitialCounts );
-    pd3dImmediateContext->CSSetShader( g_pDensity_SharedCS, nullptr, 0 );
-    pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
-
-    // Force
-    pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticleForcesUAV, &UAVInitialCounts );
-    pd3dImmediateContext->CSSetShaderResources( 1, 1, &g_pParticleDensitySRV );
-    pd3dImmediateContext->CSSetShader( g_pForce_SharedCS, nullptr, 0 );
-    pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
-
-    // Integrate
-    pd3dImmediateContext->CopyResource( g_pSortedParticles, g_pParticles );
-    pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pSortedParticlesSRV );
-    pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticlesUAV, &UAVInitialCounts );
-    pd3dImmediateContext->CSSetShaderResources( 2, 1, &g_pParticleForcesSRV );
-    pd3dImmediateContext->CSSetShader( g_pIntegrateCS, nullptr, 0 );
-    pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
-}
-
-
-//--------------------------------------------------------------------------------------
-// GPU Fluid Simulation - Optimized Algorithm using a Grid + Sort
-// Algorithm Overview:
-//    Build Grid: For every particle, calculate a hash based on the grid cell it is in
-//    Sort Grid: Sort all of the particles based on the grid ID hash
-//        Particles in the same cell will now be adjacent in memory
-//    Build Grid Indices: Located the start and end offsets for each cell
-//    Rearrange: Rearrange the particles into the same order as the grid for easy lookup
-//    Density, Force, Integrate: Perform the normal fluid simulation algorithm
-//        Except now, only calculate particles from the 8 adjacent cells + current cell
-//--------------------------------------------------------------------------------------
-void SimulateFluid_Grid( ID3D11DeviceContext* pd3dImmediateContext )
-{
-    UINT UAVInitialCounts = 0;
-
-    // Setup
-    pd3dImmediateContext->CSSetConstantBuffers( 0, 1, &g_pcbSimulationConstants );
-    pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pGridUAV, &UAVInitialCounts );
-    pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pParticlesSRV );
-
-    // Build Grid
-    pd3dImmediateContext->CSSetShader( g_pBuildGridCS, nullptr, 0 );
-    pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
-
-    // Sort Grid
-    GPUSort(pd3dImmediateContext, g_pGridUAV, g_pGridSRV, g_pGridPingPongUAV, g_pGridPingPongSRV);
-
-    // Setup
-    pd3dImmediateContext->CSSetConstantBuffers( 0, 1, &g_pcbSimulationConstants );
-    pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pGridIndicesUAV, &UAVInitialCounts );
-    pd3dImmediateContext->CSSetShaderResources( 3, 1, &g_pGridSRV );
-
-    // Build Grid Indices
-    pd3dImmediateContext->CSSetShader( g_pClearGridIndicesCS, nullptr, 0 );
-    pd3dImmediateContext->Dispatch( NUM_GRID_INDICES / SIMULATION_BLOCK_SIZE, 1, 1 );
-    pd3dImmediateContext->CSSetShader( g_pBuildGridIndicesCS, nullptr, 0 );
-    pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
-
-    // Setup
-    pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pSortedParticlesUAV, &UAVInitialCounts );
-    pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pParticlesSRV );
-    pd3dImmediateContext->CSSetShaderResources( 3, 1, &g_pGridSRV );
-
-    // Rearrange
-    pd3dImmediateContext->CSSetShader( g_pRearrangeParticlesCS, nullptr, 0 );
-    pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
-
-    // Setup
-    pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pNullUAV, &UAVInitialCounts );
-    pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pNullSRV );
-    pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pSortedParticlesSRV );
-    pd3dImmediateContext->CSSetShaderResources( 3, 1, &g_pGridSRV );
-    pd3dImmediateContext->CSSetShaderResources( 4, 1, &g_pGridIndicesSRV );
-
-    // Density
-    pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticleDensityUAV, &UAVInitialCounts );
-    pd3dImmediateContext->CSSetShader( g_pDensity_GridCS, nullptr, 0 );
-    pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
-
-    // Force
-    pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticleForcesUAV, &UAVInitialCounts );
-    pd3dImmediateContext->CSSetShaderResources( 1, 1, &g_pParticleDensitySRV );
-    pd3dImmediateContext->CSSetShader( g_pForce_GridCS, nullptr, 0 );
-    pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
-
-    // Integrate
-    pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticlesUAV, &UAVInitialCounts );
-    pd3dImmediateContext->CSSetShaderResources( 2, 1, &g_pParticleForcesSRV );
-    pd3dImmediateContext->CSSetShader( g_pIntegrateCS, nullptr, 0 );
-    pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
-}
-
 
 //--------------------------------------------------------------------------------------
 // GPU Fluid Simulation
@@ -970,22 +763,7 @@ void SimulateFluid( ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTim
 
     pd3dImmediateContext->UpdateSubresource( g_pcbSimulationConstants, 0, nullptr, &pData, 0, 0 );
 
-    switch (g_eSimMode) {
-        // Simple N^2 Algorithm
-        case SIM_MODE_SIMPLE:
-            SimulateFluid_Simple( pd3dImmediateContext );
-            break;
-
-        // Optimized N^2 Algorithm using Shared Memory
-        case SIM_MODE_SHARED:
-            SimulateFluid_Shared( pd3dImmediateContext );
-            break;
-
-        // Optimized Grid + Sort Algorithm
-        case SIM_MODE_GRID:
-            SimulateFluid_Grid( pd3dImmediateContext );
-            break;
-    }
+	SimulateFluid_Simple(pd3dImmediateContext);
 
     // Unset
     pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pNullUAV, &UAVInitialCounts );
@@ -1110,8 +888,6 @@ void CALLBACK OnD3D11DestroyDevice( void* pUserContext )
     SAFE_RELEASE( g_pClearGridIndicesCS );
     SAFE_RELEASE( g_pBuildGridIndicesCS );
     SAFE_RELEASE( g_pRearrangeParticlesCS );
-    SAFE_RELEASE( g_pSortBitonic );
-    SAFE_RELEASE( g_pSortTranspose );
 
     SAFE_RELEASE( g_pParticles );
     SAFE_RELEASE( g_pParticlesSRV );

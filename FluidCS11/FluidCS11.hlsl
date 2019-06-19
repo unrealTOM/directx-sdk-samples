@@ -20,6 +20,7 @@ struct Particle
 {
     float2 position;
     float2 velocity;
+	float ttl;
 };
 
 struct ParticleForces
@@ -524,4 +525,5 @@ void IntegrateCS( uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint
     // Update
     ParticlesRW[P_ID].position = position;
     ParticlesRW[P_ID].velocity = velocity;
+	ParticlesRW[P_ID].ttl -= g_fTimeStep;
 }
