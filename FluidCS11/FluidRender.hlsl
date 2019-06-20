@@ -11,7 +11,7 @@
 struct Particle {
     float2 position;
     float2 velocity;
-	float ttl;
+	float2 ttl;
 };
 
 struct ParticleDensity {
@@ -71,7 +71,10 @@ float4 VisualizeNumber(float n, float lower, float upper)
 VSParticleOut ParticleVS(uint ID : SV_VertexID)
 {
     VSParticleOut Out = (VSParticleOut)0;
-    Out.position = float3(ParticlesRO[ID].position, ParticlesRO[ID].ttl);
+	if (ParticlesRO[ID].ttl.x > 0)
+		Out.position = float3(ParticlesRO[ID].position, -1);
+	else
+	    Out.position = float3(ParticlesRO[ID].position, ParticlesRO[ID].ttl.y);
     Out.color = VisualizeNumber(ParticleDensityRO[ID].density, 1000.0f, 2000.0f);
     return Out;
 }

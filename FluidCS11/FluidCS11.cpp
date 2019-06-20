@@ -33,7 +33,7 @@ struct Particle
 {
     XMFLOAT2 vPosition;
     XMFLOAT2 vVelocity;
-	FLOAT fTTL;
+	XMFLOAT2 vTTL;
 };
 
 struct ParticleDensity
@@ -79,6 +79,7 @@ UINT g_iNumParticles = NUM_PARTICLES_16K;
 // Particle Properties
 // These will control how the fluid behaves
 FLOAT g_fInitialParticleSpacing = 0.0045f;
+FLOAT g_fParticleGenerateInterval = 0;
 FLOAT g_fParticleMaxTTL = 2.0f;
 FLOAT g_fSmoothlen = 0.012f;
 FLOAT g_fPressureStiffness = 200.0f;
@@ -502,8 +503,22 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
         // Arrange the particles in a nice square
         UINT x = i % iStartingWidth;
         UINT y = i / iStartingWidth;
-        particles[i].vPosition = XMFLOAT2( g_fInitialParticleSpacing * (FLOAT)x, g_fInitialParticleSpacing * (FLOAT)y );
-		particles[i].fTTL = g_fParticleMaxTTL;
+
+		UINT xx = x + iStartingWidth;
+		UINT yy = y + iStartingWidth;
+
+        particles[i].vPosition = XMFLOAT2(g_fInitialParticleSpacing * (FLOAT)xx, g_fInitialParticleSpacing * (FLOAT)yy );
+
+		if (x < iStartingWidth / 2 && y < iStartingWidth / 2)
+		{
+			particles[i].vTTL.x = ((y * iStartingWidth / 2) + x) * g_fParticleGenerateInterval;
+			particles[i].vTTL.y = g_fParticleMaxTTL;
+		}
+		else
+		{
+			particles[i].vTTL.x = 0;
+			particles[i].vTTL.y = -1;
+		}
     }
 
     // Create Structured Buffers
@@ -650,7 +665,7 @@ void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
     pd3dImmediateContext->CopyResource( g_pSortedParticles, g_pParticles );
     pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pSortedParticlesSRV );
     pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticlesUAV, &UAVInitialCounts );
-	pd3dImmediateContext->CSSetUnorderedAccessViews( 1, 1, &g_pEmitterUAV, &UAVInitialCounts );
+	pd3dImmediateContext->CSSetUnorderedAccessViews( 1, 1, &g_pEmitterUAV, &UAVInitialCounts);
 	pd3dImmediateContext->CSSetShaderResources( 2, 1, &g_pParticleForcesSRV );
     pd3dImmediateContext->CSSetShader( g_pIntegrateCS, nullptr, 0 );
     pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
@@ -668,8 +683,8 @@ void SimulateFluid( ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTim
 
     // Simulation Constants
     pData.iNumParticles = g_iNumParticles;
-    // Clamp the time step when the simulation runs slowly to prevent numerical explosion
 	pData.fParticleMaxTTL = g_fParticleMaxTTL;
+	// Clamp the time step when the simulation runs slowly to prevent numerical explosion
     pData.fTimeStep = std::min( g_fMaxAllowableTimeStep, fElapsedTime );
     pData.fSmoothlen = g_fSmoothlen;
     pData.fPressureStiffness = g_fPressureStiffness;

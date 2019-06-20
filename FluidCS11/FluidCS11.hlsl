@@ -20,7 +20,7 @@ struct Particle
 {
     float2 position;
     float2 velocity;
-	float ttl;
+	float2 ttl;
 };
 
 struct ParticleForces
@@ -134,20 +134,26 @@ void DensityCS_Simple( uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID,
     const float h_sq = g_fSmoothlen * g_fSmoothlen;
     float2 P_position = ParticlesRO[P_ID].position;
     
-    float density = 0;
+    float density = 0.0001;
     
-    // Calculate the density based on all neighbors
-    for (uint N_ID = 0 ; N_ID < g_iNumParticles ; N_ID++)
-    {
-        float2 N_position = ParticlesRO[N_ID].position;
-        
-        float2 diff = N_position - P_position;
-        float r_sq = dot(diff, diff);
-        if (r_sq < h_sq)
-        {
-            density += CalculateDensity(r_sq);
-        }
-    }
+	if (ParticlesRO[P_ID].ttl.x <= 0 && ParticlesRO[P_ID].ttl.y > 0)
+	{
+		// Calculate the density based on all neighbors
+		for (uint N_ID = 0; N_ID < g_iNumParticles; N_ID++)
+		{
+			if (ParticlesRO[N_ID].ttl.x <= 0 && ParticlesRO[N_ID].ttl.y > 0)
+			{
+				float2 N_position = ParticlesRO[N_ID].position;
+
+				float2 diff = N_position - P_position;
+				float r_sq = dot(diff, diff);
+				if (r_sq < h_sq)
+				{
+					density += CalculateDensity(r_sq);
+				}
+			}
+		}
+	}
     
     ParticlesDensityRW[P_ID].density = density;
 }
@@ -204,27 +210,33 @@ void ForceCS_Simple( uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, u
     
     float2 acceleration = float2(0, 0);
 
-    // Calculate the acceleration based on all neighbors
-    for (uint N_ID = 0 ; N_ID < g_iNumParticles ; N_ID++)
-    {
-        float2 N_position = ParticlesRO[N_ID].position;
-        
-        float2 diff = N_position - P_position;
-        float r_sq = dot(diff, diff);
-        if (r_sq < h_sq && P_ID != N_ID)
-        {
-            float2 N_velocity = ParticlesRO[N_ID].velocity;
-            float N_density = ParticlesDensityRO[N_ID].density;
-            float N_pressure = CalculatePressure(N_density);
-            float r = sqrt(r_sq);
+	if (ParticlesRO[P_ID].ttl.x <= 0 && ParticlesRO[P_ID].ttl.y > 0)
+	{
+		// Calculate the acceleration based on all neighbors
+		for (uint N_ID = 0; N_ID < g_iNumParticles; N_ID++)
+		{
+			if (ParticlesRO[N_ID].ttl.x <= 0 && ParticlesRO[N_ID].ttl.y > 0)
+			{
+				float2 N_position = ParticlesRO[N_ID].position;
 
-            // Pressure Term
-            acceleration += CalculateGradPressure(r, P_pressure, N_pressure, N_density, diff);
-            
-            // Viscosity Term
-            acceleration += CalculateLapVelocity(r, P_velocity, N_velocity, N_density);
-        }
-    }
+				float2 diff = N_position - P_position;
+				float r_sq = dot(diff, diff);
+				if (r_sq < h_sq && P_ID != N_ID)
+				{
+					float2 N_velocity = ParticlesRO[N_ID].velocity;
+					float N_density = ParticlesDensityRO[N_ID].density;
+					float N_pressure = CalculatePressure(N_density);
+					float r = sqrt(r_sq);
+
+					// Pressure Term
+					acceleration += CalculateGradPressure(r, P_pressure, N_pressure, N_density, diff);
+
+					// Viscosity Term
+					acceleration += CalculateLapVelocity(r, P_velocity, N_velocity, N_density);
+				}
+			}
+		}
+	}
     
     ParticlesForcesRW[P_ID].acceleration = acceleration / P_density;
 }
@@ -257,18 +269,26 @@ void IntegrateCS( uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint
     velocity += g_fTimeStep * acceleration;
     position += g_fTimeStep * velocity;
     
-	if (ParticlesRW[P_ID].ttl > 0)
+	if (ParticlesRW[P_ID].ttl.x > 0)
 	{
-		// Update
-		ParticlesRW[P_ID].position = position;
-		ParticlesRW[P_ID].velocity = velocity;
-		ParticlesRW[P_ID].ttl -= g_fTimeStep;
+		ParticlesRW[P_ID].ttl.x -= g_fTimeStep;
 	}
-
-	if (ParticlesRW[P_ID].ttl <= 0)
+	else
 	{
-		//particle is dead, add new ones if possible
-		unsigned int x = EmitterRW.IncrementCounter();
-		ParticlesRW[P_ID] = EmitterRW[P_ID];
+		if (ParticlesRW[P_ID].ttl.y > 0)
+		{
+			// Update
+			ParticlesRW[P_ID].position = position;
+			ParticlesRW[P_ID].velocity = velocity;
+			ParticlesRW[P_ID].ttl.y -= g_fTimeStep;
+		}
+
+		if (ParticlesRW[P_ID].ttl.y <= 0)
+		{
+			//particle is dead, add new ones if possible
+			unsigned int x = EmitterRW.IncrementCounter();
+			//ParticlesRW[P_ID] = EmitterRW[0];
+			//ParticlesRW[P_ID].ttl.y = g_fParticleMaxTTL;
+		}
 	}
 }
