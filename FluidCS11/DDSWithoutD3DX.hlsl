@@ -75,10 +75,13 @@ float4 RenderScenePS( VS_OUTPUT In ) : SV_TARGET
 	float2 AdjustUV = In.TextureUV + float2(g_Other.x, 0);
 	float4 TexColor = g_txDiffuse.Sample(g_samLinear, AdjustUV);
 
-	unsigned int x = EmitterRW.IncrementCounter();
-	EmitterRW[x].position = In.OriPosition; //float2(In.Position.x, In.Position.y);
-	EmitterRW[x].velocity = float2(0, 0);
-	EmitterRW[x].ttl = float2(0.5f, g_Other.y);
+	if (TexColor.x < 0.5f)
+	{
+		unsigned int x = EmitterRW.IncrementCounter();
+		EmitterRW[x].position = In.OriPosition;
+		EmitterRW[x].velocity = float2(0, 0);
+		EmitterRW[x].ttl = float2(0.5f, g_Other.y);
+	}
 
 	return TexColor;
 }

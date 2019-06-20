@@ -310,9 +310,16 @@ void IntegrateCS( uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint
 
 		if (ParticlesRW[P_ID].ttl.y > -500 && ParticlesRW[P_ID].ttl.y <= 0)
 		{
-			//particle is dead, add new ones if possible
-			unsigned int x = EmitterRW.IncrementCounter();
-			ParticlesRW[P_ID] = EmitterRW[x];
+			unsigned int num, stride;
+			EmitterRW.GetDimensions(num, stride);
+
+			if (num > 0)
+			{
+				//particle is dead, add new ones if possible
+				unsigned int x = EmitterRW.DecrementCounter();
+				ParticlesRW[P_ID] = EmitterRW[x];
+				EmitterRW[x].ttl.y = -1;
+			}
 		}
 	}
 }

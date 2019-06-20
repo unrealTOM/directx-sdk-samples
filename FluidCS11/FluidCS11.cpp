@@ -322,7 +322,6 @@ void InitApp()
 //--------------------------------------------------------------------------------------
 bool CALLBACK ModifyDeviceSettings( DXUTDeviceSettings* pDeviceSettings, void* pUserContext )
 {
-	pDeviceSettings->d3d11.CreateFlags |= D3D11_CREATE_DEVICE_DEBUG;
     return true;
 }
 
@@ -757,7 +756,7 @@ HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime
 {
 	HRESULT hr;
 
-	UINT UAVInitialCounts = 0;
+	UINT EmitInitialCounter = -1;
 	static float s_TotalElapsedTime = 0;
 
 	s_TotalElapsedTime += fElapsedTime;
@@ -770,8 +769,6 @@ HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime
 	XMStoreFloat4x4(&pVSPerObject->m_mWorldViewProjection, XMMatrixTranspose( g_mViewProjection ));
 	pVSPerObject->m_Others.x = s_TotalElapsedTime;
 	pVSPerObject->m_Others.y = g_fParticleMaxTTL;
-	pVSPerObject->m_Others.z = g_fMapWidth;
-	pVSPerObject->m_Others.w = g_fMapHeight;
 	pd3dImmediateContext->Unmap(g_pcbBallVSPerObject11, 0);
 	pd3dImmediateContext->VSSetConstantBuffers(0, 1, &g_pcbBallVSPerObject11);
 	pd3dImmediateContext->PSSetConstantBuffers(0, 1, &g_pcbBallVSPerObject11);
@@ -783,14 +780,14 @@ HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime
 	pd3dImmediateContext->PSSetShaderResources(0, 1, &g_pBallSRV11);
 	pd3dImmediateContext->PSSetSamplers(0, 1, &g_pBallSamLinear);
 	pd3dImmediateContext->OMSetRenderTargetsAndUnorderedAccessViews(
-		D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &g_pEmitterUAV[g_EmitSlot], &UAVInitialCounts);
+		D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &g_pEmitterUAV[g_EmitSlot], &EmitInitialCounter);
 
 	g_BallMesh.Render(pd3dImmediateContext);
 
 	// Reset
 	pd3dImmediateContext->PSSetShaderResources(0, 1, &g_pNullSRV);
 	pd3dImmediateContext->OMSetRenderTargetsAndUnorderedAccessViews(
-		D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &g_pNullUAV, &UAVInitialCounts);
+		D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &g_pNullUAV, &EmitInitialCounter);
 
 	return hr;
 }
@@ -800,7 +797,7 @@ HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime
 //--------------------------------------------------------------------------------------
 void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
 {
-    UINT UAVInitialCounts = 0;
+    UINT UAVInitialCounts = 0, EmitInitialCounter = -1;
 
     // Setup
     pd3dImmediateContext->CSSetConstantBuffers( 0, 1, &g_pcbSimulationConstants );
@@ -829,7 +826,7 @@ void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
     pd3dImmediateContext->CopyResource( g_pSortedParticles, g_pParticles );
     pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pSortedParticlesSRV );
     pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticlesUAV, &UAVInitialCounts );
-	pd3dImmediateContext->CSSetUnorderedAccessViews( 1, 1, &g_pEmitterUAV[1 - g_EmitSlot], &UAVInitialCounts);
+	pd3dImmediateContext->CSSetUnorderedAccessViews( 1, 1, &g_pEmitterUAV[1 - g_EmitSlot], &EmitInitialCounter);
 	pd3dImmediateContext->CSSetShaderResources( 2, 1, &g_pParticleForcesSRV );
     pd3dImmediateContext->CSSetShader( g_pIntegrateCS, nullptr, 0 );
     pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
@@ -840,7 +837,7 @@ void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
 //--------------------------------------------------------------------------------------
 void SimulateFluid( ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime )
 {
-    UINT UAVInitialCounts = 0;
+    UINT UAVInitialCounts = 0, EmitInitialCounter = -1;
 
     // Update per-frame variables
     CBSimulationConstants pData = {};
@@ -882,7 +879,7 @@ void SimulateFluid( ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTim
 
     // Unset
     pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pNullUAV, &UAVInitialCounts );
-	pd3dImmediateContext->CSSetUnorderedAccessViews( 1, 1, &g_pNullUAV, &UAVInitialCounts );
+	pd3dImmediateContext->CSSetUnorderedAccessViews( 1, 1, &g_pNullUAV, &EmitInitialCounter);
 	pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pNullSRV );
     pd3dImmediateContext->CSSetShaderResources( 1, 1, &g_pNullSRV );
     pd3dImmediateContext->CSSetShaderResources( 2, 1, &g_pNullSRV );
