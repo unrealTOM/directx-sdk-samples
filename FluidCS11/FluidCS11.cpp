@@ -24,6 +24,7 @@
 #include "WaitDlg.h"
 
 #include <algorithm>
+#include <random>
 
 #pragma warning( disable : 4100 )
 
@@ -79,8 +80,8 @@ UINT g_iNumParticles = NUM_PARTICLES_16K;
 // Particle Properties
 // These will control how the fluid behaves
 FLOAT g_fInitialParticleSpacing = 0.0045f;
-FLOAT g_fParticleGenerateInterval = 0;
-FLOAT g_fParticleMaxTTL = 2.0f;
+FLOAT g_fParticleGenerateInterval = 0.01f;
+FLOAT g_fParticleMaxTTL = 5.0f;
 FLOAT g_fSmoothlen = 0.012f;
 FLOAT g_fPressureStiffness = 200.0f;
 FLOAT g_fRestDensity = 1000.0f;
@@ -496,6 +497,10 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
     // This is only used to populate the GPU buffers on creation
     const UINT iStartingWidth = (UINT)sqrt( (FLOAT)g_iNumParticles );
 
+	std::ranlux24_base gen_;
+	std::uniform_int_distribution<> random_dis_(0, g_iNumParticles);
+	UINT Total = (iStartingWidth / 2) * (iStartingWidth / 2) / 8;
+
     auto particles = std::make_unique<Particle[]>(g_iNumParticles);
     ZeroMemory( particles.get(), sizeof(Particle) * g_iNumParticles );
     for ( UINT i = 0 ; i < g_iNumParticles ; i++ )
@@ -511,7 +516,8 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
 
 		if (x < iStartingWidth / 2 && y < iStartingWidth / 2)
 		{
-			particles[i].vTTL.x = ((y * iStartingWidth / 2) + x) * g_fParticleGenerateInterval;
+			//particles[i].vTTL.x = ((y * iStartingWidth / 2) + x) * g_fParticleGenerateInterval;
+			particles[i].vTTL.x = (random_dis_(gen_) % Total + y * iStartingWidth / 4) * g_fParticleGenerateInterval;
 			particles[i].vTTL.y = g_fParticleMaxTTL;
 		}
 		else
