@@ -456,6 +456,7 @@ HRESULT CreateStructuredBuffer(
     D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
     uavDesc.Format = DXGI_FORMAT_UNKNOWN;
     uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+	uavDesc.Buffer.FirstElement = 0;
     uavDesc.Buffer.NumElements = iNumElements;
 	if (flag != D3D11_BUFFER_UAV_FLAG_RAW)
 		uavDesc.Buffer.Flags = flag;

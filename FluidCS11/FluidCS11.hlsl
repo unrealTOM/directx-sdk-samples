@@ -287,7 +287,7 @@ void IntegrateCS( uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint
 		{
 			//particle is dead, add new ones if possible
 			unsigned int x = EmitterRW.IncrementCounter();
-			//ParticlesRW[P_ID] = EmitterRW[0];
+			//ParticlesRW[P_ID] = EmitterRW[x];
 			//ParticlesRW[P_ID].ttl.y = g_fParticleMaxTTL;
 		}
 	}
