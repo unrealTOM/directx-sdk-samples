@@ -63,16 +63,8 @@ struct UINT2
 // Global variables
 //--------------------------------------------------------------------------------------
 
-// Compute Shader Constants
-// Grid cell key size for sorting, 8-bits for x and y
-const UINT NUM_GRID_INDICES = 65536;
-
 // Numthreads size for the simulation
 const UINT SIMULATION_BLOCK_SIZE = 256;
-
-// Numthreads size for the sort
-const UINT BITONIC_BLOCK_SIZE = 512;
-const UINT TRANSPOSE_BLOCK_SIZE = 16;
 
 // For this sample, only use power-of-2 numbers >= 8K and <= 64K
 // The algorithm can be extended to support any number of particles
@@ -141,7 +133,6 @@ ID3D11InputLayout*                  g_pBallLayout11 = NULL;
 ID3D11ShaderResourceView*           g_pBallSRV11 = NULL;
 ID3D11SamplerState*                 g_pBallSamLinear = NULL;
 ID3D11Buffer*                       g_pcbBallVSPerObject11 = NULL;
-ID3D11Buffer*                       g_pcbBallVSPerFrame11 = NULL;
 
 // Resources
 CDXUTTextHelper*                    g_pTxtHelper = nullptr;
@@ -211,27 +202,11 @@ __declspec(align(16)) struct CBRenderConstants
     FLOAT fParticleSize;
 };
 
-__declspec(align(16)) struct SortCB
-{
-    UINT iLevel;
-    UINT iLevelMask;
-    UINT iWidth;
-    UINT iHeight;
-};
-
 __declspec(align(16)) struct CB_VS_PER_OBJECT
 {
-	XMMATRIX m_mWorldViewProjection;
-	XMMATRIX m_mWorld;
-	FLOAT m_fElapsedTime;
-	FLOAT m_fParticleMaxTTL;
+	XMFLOAT4X4 m_mWorldViewProjection;
+	XMFLOAT4A m_Others; //x = m_fElapsedTime, y = m_fParticleMaxTTL
 };
-
-__declspec(align(16)) struct CB_VS_PER_FRAME
-{
-	XMFLOAT4A m_vLightDir;
-};
-
 #pragma warning(pop)
 
 // Constant Buffers
@@ -348,6 +323,7 @@ void InitApp()
 //--------------------------------------------------------------------------------------
 bool CALLBACK ModifyDeviceSettings( DXUTDeviceSettings* pDeviceSettings, void* pUserContext )
 {
+	pDeviceSettings->d3d11.CreateFlags |= D3D11_CREATE_DEVICE_DEBUG;
     return true;
 }
 
@@ -513,7 +489,6 @@ HRESULT CreateBallResources(ID3D11Device* pd3dDevice)
 
 	SAFE_RELEASE(g_pBallSamLinear);
 	SAFE_RELEASE(g_pcbBallVSPerObject11);
-	SAFE_RELEASE(g_pcbBallVSPerFrame11);
 	SAFE_RELEASE(g_pBallSRV11);
 
 	// Create state objects
@@ -537,10 +512,6 @@ HRESULT CreateBallResources(ID3D11Device* pd3dDevice)
 	cbDesc.ByteWidth = sizeof(CB_VS_PER_OBJECT);
 	V_RETURN(pd3dDevice->CreateBuffer(&cbDesc, NULL, &g_pcbBallVSPerObject11));
 	DXUT_SetDebugName(g_pcbBallVSPerObject11, "CB_VS_PER_OBJECT");
-
-	cbDesc.ByteWidth = sizeof(CB_VS_PER_FRAME);
-	V_RETURN(pd3dDevice->CreateBuffer(&cbDesc, NULL, &g_pcbBallVSPerFrame11));
-	DXUT_SetDebugName(g_pcbBallVSPerFrame11, "CB_VS_PER_FRAME");
 
 	// load the mesh
 	V_RETURN(g_BallMesh.Create(pd3dDevice, L"ball.sdkmesh"));
@@ -635,12 +606,16 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
     DXUT_SetDebugName( g_pParticlesSRV, "Particles SRV" );
     DXUT_SetDebugName( g_pParticlesUAV, "Particles UAV" );
 
+	const CHAR* Emitter[2] = {"Emitter 1", "Emitter 2"};
+	const CHAR* EmitterSRV[2] = {"Emitter SRV 1", "Emitter SRV 2"};
+	const CHAR* EmitterUAV[2] = { "Emitter UAV 1", "Emitter UAV 2" };
+
 	for (UINT i = 0; i < 2; ++i)
 	{
 		V_RETURN(CreateStructuredBuffer< Particle >(pd3dDevice, g_iNumParticles, &g_pEmitter[i], &g_pEmitterSRV[i], &g_pEmitterUAV[i], particles.get(), D3D11_BUFFER_UAV_FLAG_COUNTER));
-		DXUT_SetDebugName(g_pEmitter[i], "Emitter");
-		DXUT_SetDebugName(g_pEmitterSRV[i], "Emitter SRV");
-		DXUT_SetDebugName(g_pEmitterUAV[i], "Emitter UAV");
+		DXUT_SetDebugName(g_pEmitter[i], Emitter[i]);
+		DXUT_SetDebugName(g_pEmitterSRV[i], EmitterSRV[i]);
+		DXUT_SetDebugName(g_pEmitterUAV[i], EmitterUAV[i]);
 	}
 
     V_RETURN( CreateStructuredBuffer< Particle >( pd3dDevice, g_iNumParticles, &g_pSortedParticles, &g_pSortedParticlesSRV, &g_pSortedParticlesUAV, particles.get()) );
@@ -784,7 +759,8 @@ HRESULT CALLBACK OnD3D11ResizedSwapChain( ID3D11Device* pd3dDevice, IDXGISwapCha
 //--------------------------------------------------------------------------------------
 // GPU Fluid Simulation
 //--------------------------------------------------------------------------------------
-HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime)
+HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, 
+	ID3D11RenderTargetView* pRtv, ID3D11DepthStencilView* pDsv, float fElapsedTime)
 {
 	HRESULT hr;
 
@@ -802,34 +778,32 @@ HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime
 
 	// Set the constant buffers
 	D3D11_MAPPED_SUBRESOURCE MappedResource;
-	V_RETURN(pd3dImmediateContext->Map(g_pcbBallVSPerFrame11, 0, D3D11_MAP_WRITE_DISCARD, 0, &MappedResource));
-	CB_VS_PER_FRAME* pVSPerFrame = (CB_VS_PER_FRAME*)MappedResource.pData;
-	pVSPerFrame->m_vLightDir = XMFLOAT4A(0, 0.707f, -0.707f, 0);
-	pd3dImmediateContext->Unmap(g_pcbBallVSPerFrame11, 0);
-	pd3dImmediateContext->VSSetConstantBuffers(1, 1, &g_pcbBallVSPerFrame11);
-
 	V_RETURN(pd3dImmediateContext->Map(g_pcbBallVSPerObject11, 0, D3D11_MAP_WRITE_DISCARD, 0, &MappedResource));
 	CB_VS_PER_OBJECT* pVSPerObject = (CB_VS_PER_OBJECT*)MappedResource.pData;
-	pVSPerObject->m_mWorldViewProjection = XMMatrixTranspose(mWorldViewProjection);
-	pVSPerObject->m_mWorld = XMMatrixTranspose(mWorld);
-	pVSPerObject->m_fElapsedTime = s_TotalElapsedTime;
-	pVSPerObject->m_fParticleMaxTTL = g_fParticleMaxTTL;
+	XMStoreFloat4x4(&pVSPerObject->m_mWorldViewProjection, XMMatrixTranspose(mWorldViewProjection));
+	pVSPerObject->m_Others.x = s_TotalElapsedTime;
+	pVSPerObject->m_Others.y = g_fParticleMaxTTL;
+	pVSPerObject->m_Others.z = g_fMapWidth;
+	pVSPerObject->m_Others.w = g_fMapHeight;
 	pd3dImmediateContext->Unmap(g_pcbBallVSPerObject11, 0);
 	pd3dImmediateContext->VSSetConstantBuffers(0, 1, &g_pcbBallVSPerObject11);
+	pd3dImmediateContext->PSSetConstantBuffers(0, 1, &g_pcbBallVSPerObject11);
 
 	// Set render resources
 	pd3dImmediateContext->IASetInputLayout(g_pBallLayout11);
 	pd3dImmediateContext->VSSetShader(g_pBallVertexShader11, NULL, 0);
 	pd3dImmediateContext->PSSetShader(g_pBallPixelShader11, NULL, 0);
 	pd3dImmediateContext->PSSetShaderResources(0, 1, &g_pBallSRV11);
-	pd3dImmediateContext->CSSetUnorderedAccessViews(1, 1, &g_pEmitterUAV[g_EmitSlot], &UAVInitialCounts);
 	pd3dImmediateContext->PSSetSamplers(0, 1, &g_pBallSamLinear);
+	pd3dImmediateContext->OMSetRenderTargetsAndUnorderedAccessViews(
+		D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &g_pEmitterUAV[g_EmitSlot], &UAVInitialCounts);
 
 	g_BallMesh.Render(pd3dImmediateContext);
 
 	// Reset
 	pd3dImmediateContext->PSSetShaderResources(0, 1, &g_pNullSRV);
-	pd3dImmediateContext->CSSetUnorderedAccessViews(1, 1, &g_pNullUAV, &UAVInitialCounts);
+	pd3dImmediateContext->OMSetRenderTargetsAndUnorderedAccessViews(
+		D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &g_pNullUAV, &UAVInitialCounts);
 
 	return hr;
 }
@@ -992,7 +966,7 @@ void CALLBACK OnD3D11FrameRender( ID3D11Device* pd3dDevice, ID3D11DeviceContext*
     pd3dImmediateContext->ClearDepthStencilView( pDSV, D3D11_CLEAR_DEPTH, 1.0, 0 );
 
 	if (!g_EmitWithCS)
-		RenderBall( pd3dImmediateContext, fElapsedTime );
+		RenderBall( pd3dImmediateContext, pRTV, pDSV, fElapsedTime );
 
     SimulateFluid( pd3dImmediateContext, fElapsedTime );
 
@@ -1037,7 +1011,6 @@ void CALLBACK OnD3D11DestroyDevice( void* pUserContext )
 	SAFE_RELEASE(g_pBallSamLinear);
 
 	SAFE_RELEASE(g_pcbBallVSPerObject11);
-	SAFE_RELEASE(g_pcbBallVSPerFrame11);
 
     SAFE_RELEASE( g_pcbSimulationConstants );
     SAFE_RELEASE( g_pcbRenderConstants );

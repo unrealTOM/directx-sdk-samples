@@ -18,16 +18,9 @@ struct Particle
 //--------------------------------------------------------------------------------------
 cbuffer cbPerObject : register( b0 )
 {
-    matrix  g_mWorldViewProjection;//  : packoffset( c0 );
-    matrix  g_mWorld          ;//      : packoffset( c4 );
-	float   g_fElapsedTime;
-	float   g_fParticleMaxTTL;
+    matrix  g_mWorldViewProjection  : packoffset( c0 );
+	float4  g_Other					: packoffset( c4 );
 }
-
-cbuffer cbPerFrame : register( b1 )
-{
-    float3              g_vLightDir             : packoffset( c0 );
-};
 
 RWStructuredBuffer<Particle> EmitterRW : register(u1);
 
@@ -43,14 +36,12 @@ SamplerState g_samLinear : register( s0 );
 struct VS_INPUT
 {
     float4 Position     : POSITION; // vertex position 
-    float3 Normal       : NORMAL;   // this normal comes in per-vertex
     float2 TextureUV    : TEXCOORD0;// vertex texture coords 
 };
 
 struct VS_OUTPUT
 {
     float4 Position     : SV_POSITION; // vertex position 
-    float4 Diffuse      : COLOR0;      // vertex diffuse color (note that COLOR0 is clamped from 0..1)
     float2 TextureUV    : TEXCOORD0;   // vertex texture coords 
 };
 
@@ -60,17 +51,9 @@ struct VS_OUTPUT
 VS_OUTPUT RenderSceneVS( VS_INPUT input )
 {
     VS_OUTPUT Output;
-    float3 vNormalWorldSpace;
     
     // Transform the position from object space to homogeneous projection space
     Output.Position = mul( input.Position, g_mWorldViewProjection );
-    
-    // Transform the normal from object space to world space    
-    vNormalWorldSpace = normalize(mul(input.Normal, (float3x3)g_mWorld)); // normal (world space)
-
-    // Calc diffuse color    
-    Output.Diffuse.rgb = max(0.3,dot(vNormalWorldSpace, g_vLightDir)).rrr;
-    Output.Diffuse.a = 1.0f; 
     
     // Just copy the texture coordinate through
     Output.TextureUV = input.TextureUV; 
@@ -85,14 +68,13 @@ VS_OUTPUT RenderSceneVS( VS_INPUT input )
 float4 RenderScenePS( VS_OUTPUT In ) : SV_TARGET
 { 
 	// Lookup mesh texture and modulate it with diffuse
-//	float2 AdjustUV = In.TextureUV + float2(g_fElapsedTime, g_fElapsedTime);
-	float4 TexColor = g_txDiffuse.Sample(g_samLinear, In.TextureUV);
+	float2 AdjustUV = In.TextureUV + float2(g_Other.x, 0);
+	float4 TexColor = g_txDiffuse.Sample(g_samLinear, AdjustUV);
 
 	unsigned int x = EmitterRW.IncrementCounter();
-	EmitterRW[x].position = float2(0.0045f * (x * 20), 0.0045f * (x * 20)); //In.Position.xy;
-	EmitterRW[x].velocity = float2(1.0f, 1.0f);
-	EmitterRW[x].ttl = float2(0.5f, g_fParticleMaxTTL);
+	EmitterRW[x].position = float2(In.Position.x * g_Other.z, In.Position.y * g_Other.w);
+	EmitterRW[x].velocity = float2(0, 0);
+	EmitterRW[x].ttl = float2(0.5f, g_Other.y);
 
-	//return TexColor * In.Diffuse;
-	return float4(x * 0.01f, 0, 0, 1);
+	return TexColor;
 }
