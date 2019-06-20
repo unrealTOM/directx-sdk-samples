@@ -42,5 +42,8 @@
     <FxCompile Include="FluidCS11.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
+    <FxCompile Include="DDSWithoutD3DX.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
   </ItemGroup>
 </Project>

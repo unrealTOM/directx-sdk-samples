@@ -256,15 +256,14 @@ void EmitCS(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid
 	unsigned int i = P_ID % (g_iEmitterWidth * 2) + g_iEmitterWidth;
 	unsigned int j = P_ID / (g_iEmitterWidth * 2) + g_iEmitterWidth;
 
-	unsigned int x = EmitterRW.IncrementCounter();
-
-	EmitterRW[x].position = float2(g_fInitialParticleSpacing * i, g_fInitialParticleSpacing * j);
-	EmitterRW[x].velocity = float2(0,0);
-
 	if (i < 2 * g_iEmitterWidth && j < 2 * g_iEmitterWidth)
+	{
+		unsigned int x = EmitterRW.IncrementCounter();
+
+		EmitterRW[x].position = float2(g_fInitialParticleSpacing * i, g_fInitialParticleSpacing * j);
+		EmitterRW[x].velocity = float2(0, 0);
 		EmitterRW[x].ttl = float2(0.5f, g_fParticleMaxTTL);
-	else
-		EmitterRW[x].ttl = float2(0, -1000);
+	}
 }
 
 //--------------------------------------------------------------------------------------
@@ -314,7 +313,6 @@ void IntegrateCS( uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint
 			//particle is dead, add new ones if possible
 			unsigned int x = EmitterRW.IncrementCounter();
 			ParticlesRW[P_ID] = EmitterRW[x];
-			//ParticlesRW[P_ID].ttl.y = g_fParticleMaxTTL;
 		}
 	}
 }

@@ -18,13 +18,19 @@
 
 #include "DXUT.h"
 #include "DXUTgui.h"
+#include "DXUTmisc.h"
 #include "DXUTsettingsDlg.h"
 #include "SDKmisc.h"
 #include "resource.h"
 #include "WaitDlg.h"
+#include "DXUTcamera.h"
+#include "DDSTextureLoader.h"
+#include "SDKMesh.h"
+#include "resource.h"
 
 #include <algorithm>
 #include <random>
+#include <d3dx11effect.h>
 
 #pragma warning( disable : 4100 )
 
@@ -127,6 +133,16 @@ CD3DSettingsDlg                     g_D3DSettingsDlg;        // Device settings 
 CDXUTDialog                         g_HUD;                   // manages the 3D   
 CDXUTDialog                         g_SampleUI;              // dialog for sample specific controls
 
+CModelViewerCamera                  g_Camera;               // A model viewing camera
+CDXUTSDKMesh                        g_BallMesh;				    // mesh
+ID3D11VertexShader*                 g_pBallVertexShader11 = NULL;
+ID3D11PixelShader*                  g_pBallPixelShader11 = NULL;
+ID3D11InputLayout*                  g_pBallLayout11 = NULL;
+ID3D11ShaderResourceView*           g_pBallSRV11 = NULL;
+ID3D11SamplerState*                 g_pBallSamLinear = NULL;
+ID3D11Buffer*                       g_pcbBallVSPerObject11 = NULL;
+ID3D11Buffer*                       g_pcbBallVSPerFrame11 = NULL;
+
 // Resources
 CDXUTTextHelper*                    g_pTxtHelper = nullptr;
 
@@ -145,9 +161,9 @@ ID3D11Buffer*                       g_pParticles = nullptr;
 ID3D11ShaderResourceView*           g_pParticlesSRV = nullptr;
 ID3D11UnorderedAccessView*          g_pParticlesUAV = nullptr;
 
-ID3D11Buffer*                       g_pEmitter = nullptr;
-ID3D11ShaderResourceView*           g_pEmitterSRV = nullptr;
-ID3D11UnorderedAccessView*          g_pEmitterUAV = nullptr;
+ID3D11Buffer*                       g_pEmitter[2] = { nullptr, nullptr };
+ID3D11ShaderResourceView*           g_pEmitterSRV[2] = { nullptr, nullptr };
+ID3D11UnorderedAccessView*          g_pEmitterUAV[2] = {nullptr, nullptr};
 
 ID3D11Buffer*                       g_pSortedParticles = nullptr;
 ID3D11ShaderResourceView*           g_pSortedParticlesSRV = nullptr;
@@ -160,6 +176,9 @@ ID3D11UnorderedAccessView*          g_pParticleDensityUAV = nullptr;
 ID3D11Buffer*                       g_pParticleForces = nullptr;
 ID3D11ShaderResourceView*           g_pParticleForcesSRV = nullptr;
 ID3D11UnorderedAccessView*          g_pParticleForcesUAV = nullptr;
+
+UINT g_EmitSlot = 0;
+BOOL g_EmitWithCS = false;
 
 // Constant Buffer Layout
 #pragma warning(push)
@@ -199,6 +218,20 @@ __declspec(align(16)) struct SortCB
     UINT iWidth;
     UINT iHeight;
 };
+
+__declspec(align(16)) struct CB_VS_PER_OBJECT
+{
+	XMMATRIX m_mWorldViewProjection;
+	XMMATRIX m_mWorld;
+	FLOAT m_fElapsedTime;
+	FLOAT m_fParticleMaxTTL;
+};
+
+__declspec(align(16)) struct CB_VS_PER_FRAME
+{
+	XMFLOAT4A m_vLightDir;
+};
+
 #pragma warning(pop)
 
 // Constant Buffers
@@ -469,6 +502,59 @@ HRESULT CreateStructuredBuffer(
     return hr;
 }
 
+//--------------------------------------------------------------------------------------
+// Create the ball rendering related resources
+//--------------------------------------------------------------------------------------
+HRESULT CreateBallResources(ID3D11Device* pd3dDevice)
+{
+	HRESULT hr = S_OK;
+
+	g_BallMesh.Destroy();
+
+	SAFE_RELEASE(g_pBallSamLinear);
+	SAFE_RELEASE(g_pcbBallVSPerObject11);
+	SAFE_RELEASE(g_pcbBallVSPerFrame11);
+	SAFE_RELEASE(g_pBallSRV11);
+
+	// Create state objects
+	D3D11_SAMPLER_DESC samDesc;
+	ZeroMemory(&samDesc, sizeof(samDesc));
+	samDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+	samDesc.AddressU = samDesc.AddressV = samDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+	samDesc.MaxAnisotropy = 1;
+	samDesc.ComparisonFunc = D3D11_COMPARISON_ALWAYS;
+	samDesc.MaxLOD = D3D11_FLOAT32_MAX;
+	V_RETURN(pd3dDevice->CreateSamplerState(&samDesc, &g_pBallSamLinear));
+	DXUT_SetDebugName(g_pBallSamLinear, "Linear");
+
+	// Create constant buffers
+	D3D11_BUFFER_DESC cbDesc;
+	ZeroMemory(&cbDesc, sizeof(cbDesc));
+	cbDesc.Usage = D3D11_USAGE_DYNAMIC;
+	cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+	cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+	cbDesc.ByteWidth = sizeof(CB_VS_PER_OBJECT);
+	V_RETURN(pd3dDevice->CreateBuffer(&cbDesc, NULL, &g_pcbBallVSPerObject11));
+	DXUT_SetDebugName(g_pcbBallVSPerObject11, "CB_VS_PER_OBJECT");
+
+	cbDesc.ByteWidth = sizeof(CB_VS_PER_FRAME);
+	V_RETURN(pd3dDevice->CreateBuffer(&cbDesc, NULL, &g_pcbBallVSPerFrame11));
+	DXUT_SetDebugName(g_pcbBallVSPerFrame11, "CB_VS_PER_FRAME");
+
+	// load the mesh
+	V_RETURN(g_BallMesh.Create(pd3dDevice, L"ball.sdkmesh"));
+
+	// Load the texture
+	V_RETURN(CreateDDSTextureFromFile(pd3dDevice, L"seafloor.dds", nullptr, &g_pBallSRV11));
+
+	// Setup the camera's view parameters
+	XMVECTORF32 vecEye = {0.0f, 0.0f, -5.0f, 0.0f};
+	XMVECTORF32 vecAt = {0.0f, 0.0f, -0.0f, 0.0f};
+	g_Camera.SetViewParams(vecEye, vecAt);
+
+	return hr;
+}
 
 //--------------------------------------------------------------------------------------
 // Create the buffers used for the simulation data
@@ -482,9 +568,12 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
     SAFE_RELEASE( g_pParticlesSRV );
     SAFE_RELEASE( g_pParticlesUAV );
 
-	SAFE_RELEASE(g_pEmitter);
-	SAFE_RELEASE(g_pEmitterSRV);
-	SAFE_RELEASE(g_pEmitterUAV);
+	for (UINT i = 0; i < 2; ++i)
+	{
+		SAFE_RELEASE(g_pEmitter[i]);
+		SAFE_RELEASE(g_pEmitterSRV[i]);
+		SAFE_RELEASE(g_pEmitterUAV[i]);
+	}
 
     SAFE_RELEASE( g_pSortedParticles );
     SAFE_RELEASE( g_pSortedParticlesSRV );
@@ -500,33 +589,45 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
 
 	std::ranlux24_base gen_;
 	std::uniform_int_distribution<> random_dis_(0, g_iNumParticles);
-	UINT Total = g_iEmitterWidth * g_iEmitterWidth / 8;
 
     auto particles = std::make_unique<Particle[]>(g_iNumParticles);
     ZeroMemory( particles.get(), sizeof(Particle) * g_iNumParticles );
-    for ( UINT i = 0 ; i < g_iNumParticles ; i++ )
-    {
-        // Arrange the particles in a nice square
-        UINT x = i % (g_iEmitterWidth * 2);
-        UINT y = i / (g_iEmitterWidth * 2);
 
-		UINT xx = x + (g_iEmitterWidth * 2);
-		UINT yy = y + (g_iEmitterWidth * 2);
-
-        particles[i].vPosition = XMFLOAT2(g_fInitialParticleSpacing * (FLOAT)xx, g_fInitialParticleSpacing * (FLOAT)yy );
-
-		if (x < g_iEmitterWidth && y < g_iEmitterWidth)
+	if (g_EmitWithCS)
+	{
+		UINT Total = g_iEmitterWidth * g_iEmitterWidth / 8;
+		for (UINT i = 0; i < g_iNumParticles; i++)
 		{
-			//particles[i].vTTL.x = ((y * iStartingWidth / 2) + x) * g_fParticleGenerateInterval;
-			particles[i].vTTL.x = (random_dis_(gen_) % Total + y * g_iEmitterWidth / 2) * g_fParticleGenerateInterval;
-			particles[i].vTTL.y = g_fParticleMaxTTL;
+			// Arrange the particles in a nice square
+			UINT x = i % (g_iEmitterWidth * 2);
+			UINT y = i / (g_iEmitterWidth * 2);
+
+			UINT xx = x + (g_iEmitterWidth * 2);
+			UINT yy = y + (g_iEmitterWidth * 2);
+
+			particles[i].vPosition = XMFLOAT2(g_fInitialParticleSpacing * (FLOAT)xx, g_fInitialParticleSpacing * (FLOAT)yy);
+
+			if (x < g_iEmitterWidth && y < g_iEmitterWidth)
+			{
+				//particles[i].vTTL.x = ((y * iStartingWidth / 2) + x) * g_fParticleGenerateInterval;
+				particles[i].vTTL.x = (random_dis_(gen_) % Total + y * g_iEmitterWidth / 2) * g_fParticleGenerateInterval;
+				particles[i].vTTL.y = g_fParticleMaxTTL;
+			}
+			else
+			{
+				particles[i].vTTL.x = 0;
+				particles[i].vTTL.y = -1000;
+			}
 		}
-		else
+	}
+	else
+	{
+		for (UINT i = 0; i < g_iNumParticles; i++)
 		{
 			particles[i].vTTL.x = 0;
-			particles[i].vTTL.y = -1000;
+			particles[i].vTTL.y = -1;
 		}
-    }
+	}
 
     // Create Structured Buffers
     V_RETURN( CreateStructuredBuffer< Particle >( pd3dDevice, g_iNumParticles, &g_pParticles, &g_pParticlesSRV, &g_pParticlesUAV, particles.get() ) );
@@ -534,10 +635,13 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
     DXUT_SetDebugName( g_pParticlesSRV, "Particles SRV" );
     DXUT_SetDebugName( g_pParticlesUAV, "Particles UAV" );
 
-	V_RETURN(CreateStructuredBuffer< Particle >(pd3dDevice, g_iNumParticles, &g_pEmitter, &g_pEmitterSRV, &g_pEmitterUAV, particles.get(), D3D11_BUFFER_UAV_FLAG_COUNTER));
-	DXUT_SetDebugName(g_pEmitter, "Emitter");
-	DXUT_SetDebugName(g_pEmitterSRV, "Emitter SRV");
-	DXUT_SetDebugName(g_pEmitterUAV, "Emitter UAV");
+	for (UINT i = 0; i < 2; ++i)
+	{
+		V_RETURN(CreateStructuredBuffer< Particle >(pd3dDevice, g_iNumParticles, &g_pEmitter[i], &g_pEmitterSRV[i], &g_pEmitterUAV[i], particles.get(), D3D11_BUFFER_UAV_FLAG_COUNTER));
+		DXUT_SetDebugName(g_pEmitter[i], "Emitter");
+		DXUT_SetDebugName(g_pEmitterSRV[i], "Emitter SRV");
+		DXUT_SetDebugName(g_pEmitterUAV[i], "Emitter UAV");
+	}
 
     V_RETURN( CreateStructuredBuffer< Particle >( pd3dDevice, g_iNumParticles, &g_pSortedParticles, &g_pSortedParticlesSRV, &g_pSortedParticlesUAV, particles.get()) );
     DXUT_SetDebugName( g_pSortedParticles, "Sorted" );
@@ -573,6 +677,29 @@ HRESULT CALLBACK OnD3D11CreateDevice( ID3D11Device* pd3dDevice, const DXGI_SURFA
 
     // Compile the Shaders
     ID3DBlob* pBlob = nullptr;
+
+	// Create our vertex input layout
+	const D3D11_INPUT_ELEMENT_DESC layout[] =
+	{
+		{ "POSITION",  0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,  D3D11_INPUT_PER_VERTEX_DATA, 0 },
+		{ "NORMAL",    0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+		{ "TEXCOORD",  0, DXGI_FORMAT_R32G32_FLOAT,    0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+	};
+
+	// Shaders used for rendering the ball
+	V_RETURN(DXUTCompileFromFile(L"DDSWithoutD3DX.hlsl", nullptr, "RenderSceneVS", "vs_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob));
+	V_RETURN(pd3dDevice->CreateVertexShader(pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pBallVertexShader11));
+	DXUT_SetDebugName(g_pBallVertexShader11, "RenderSceneVS");
+
+	V_RETURN(pd3dDevice->CreateInputLayout(layout, ARRAYSIZE(layout), pBlob->GetBufferPointer(), pBlob->GetBufferSize(), &g_pBallLayout11));
+	DXUT_SetDebugName(g_pBallLayout11, "Primary");
+
+	SAFE_RELEASE(pBlob);
+
+	V_RETURN(DXUTCompileFromFile(L"DDSWithoutD3DX.hlsl", nullptr, "RenderScenePS", "ps_5_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob));
+	V_RETURN(pd3dDevice->CreatePixelShader(pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pBallPixelShader11));
+	SAFE_RELEASE(pBlob);
+	DXUT_SetDebugName(g_pBallPixelShader11, "RenderScenePS");
 
     // Rendering Shaders
     V_RETURN( DXUTCompileFromFile( L"FluidRender.hlsl", nullptr, "ParticleVS", "vs_4_0", D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob ) );
@@ -618,6 +745,9 @@ HRESULT CALLBACK OnD3D11CreateDevice( ID3D11Device* pd3dDevice, const DXGI_SURFA
 
     CompilingShadersDlg.DestroyDialog();
 
+	// Create ball rendering related resources
+	V_RETURN( CreateBallResources(pd3dDevice) );
+
     // Create the Simulation Buffers
     V_RETURN( CreateSimulationBuffers( pd3dDevice ) );
 
@@ -652,6 +782,59 @@ HRESULT CALLBACK OnD3D11ResizedSwapChain( ID3D11Device* pd3dDevice, IDXGISwapCha
 }
 
 //--------------------------------------------------------------------------------------
+// GPU Fluid Simulation
+//--------------------------------------------------------------------------------------
+HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime)
+{
+	HRESULT hr;
+
+	UINT UAVInitialCounts = 0;
+	static float s_TotalElapsedTime = 0;
+
+	s_TotalElapsedTime += fElapsedTime;
+	s_TotalElapsedTime -= (int)s_TotalElapsedTime;
+
+	// Get the projection & view matrix from the camera class
+	XMMATRIX mWorld = g_Camera.GetWorldMatrix();
+	XMMATRIX mView = g_Camera.GetViewMatrix();
+	XMMATRIX mProj = g_Camera.GetProjMatrix();
+	XMMATRIX mWorldViewProjection = mWorld * mView * mProj;
+
+	// Set the constant buffers
+	D3D11_MAPPED_SUBRESOURCE MappedResource;
+	V_RETURN(pd3dImmediateContext->Map(g_pcbBallVSPerFrame11, 0, D3D11_MAP_WRITE_DISCARD, 0, &MappedResource));
+	CB_VS_PER_FRAME* pVSPerFrame = (CB_VS_PER_FRAME*)MappedResource.pData;
+	pVSPerFrame->m_vLightDir = XMFLOAT4A(0, 0.707f, -0.707f, 0);
+	pd3dImmediateContext->Unmap(g_pcbBallVSPerFrame11, 0);
+	pd3dImmediateContext->VSSetConstantBuffers(1, 1, &g_pcbBallVSPerFrame11);
+
+	V_RETURN(pd3dImmediateContext->Map(g_pcbBallVSPerObject11, 0, D3D11_MAP_WRITE_DISCARD, 0, &MappedResource));
+	CB_VS_PER_OBJECT* pVSPerObject = (CB_VS_PER_OBJECT*)MappedResource.pData;
+	pVSPerObject->m_mWorldViewProjection = XMMatrixTranspose(mWorldViewProjection);
+	pVSPerObject->m_mWorld = XMMatrixTranspose(mWorld);
+	pVSPerObject->m_fElapsedTime = s_TotalElapsedTime;
+	pVSPerObject->m_fParticleMaxTTL = g_fParticleMaxTTL;
+	pd3dImmediateContext->Unmap(g_pcbBallVSPerObject11, 0);
+	pd3dImmediateContext->VSSetConstantBuffers(0, 1, &g_pcbBallVSPerObject11);
+
+	// Set render resources
+	pd3dImmediateContext->IASetInputLayout(g_pBallLayout11);
+	pd3dImmediateContext->VSSetShader(g_pBallVertexShader11, NULL, 0);
+	pd3dImmediateContext->PSSetShader(g_pBallPixelShader11, NULL, 0);
+	pd3dImmediateContext->PSSetShaderResources(0, 1, &g_pBallSRV11);
+	pd3dImmediateContext->CSSetUnorderedAccessViews(1, 1, &g_pEmitterUAV[g_EmitSlot], &UAVInitialCounts);
+	pd3dImmediateContext->PSSetSamplers(0, 1, &g_pBallSamLinear);
+
+	g_BallMesh.Render(pd3dImmediateContext);
+
+	// Reset
+	pd3dImmediateContext->PSSetShaderResources(0, 1, &g_pNullSRV);
+	pd3dImmediateContext->CSSetUnorderedAccessViews(1, 1, &g_pNullUAV, &UAVInitialCounts);
+
+	return hr;
+}
+
+//--------------------------------------------------------------------------------------
 // GPU Fluid Simulation - Simple N^2 Algorithm
 //--------------------------------------------------------------------------------------
 void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
@@ -663,9 +846,12 @@ void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
     pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pParticlesSRV );
 
 	// Emit
-	pd3dImmediateContext->CSSetUnorderedAccessViews(1, 1, &g_pEmitterUAV, &UAVInitialCounts);
-	pd3dImmediateContext->CSSetShader(g_pEmitCS, nullptr, 0);
-	pd3dImmediateContext->Dispatch(g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1);
+	if (g_EmitWithCS)
+	{
+		pd3dImmediateContext->CSSetUnorderedAccessViews(1, 1, &g_pEmitterUAV[g_EmitSlot], &UAVInitialCounts);
+		pd3dImmediateContext->CSSetShader(g_pEmitCS, nullptr, 0);
+		pd3dImmediateContext->Dispatch(g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1);
+	}
 
     // Density
     pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticleDensityUAV, &UAVInitialCounts );
@@ -682,7 +868,7 @@ void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
     pd3dImmediateContext->CopyResource( g_pSortedParticles, g_pParticles );
     pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pSortedParticlesSRV );
     pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticlesUAV, &UAVInitialCounts );
-	pd3dImmediateContext->CSSetUnorderedAccessViews( 1, 1, &g_pEmitterUAV, &UAVInitialCounts);
+	pd3dImmediateContext->CSSetUnorderedAccessViews( 1, 1, &g_pEmitterUAV[1 - g_EmitSlot], &UAVInitialCounts);
 	pd3dImmediateContext->CSSetShaderResources( 2, 1, &g_pParticleForcesSRV );
     pd3dImmediateContext->CSSetShader( g_pIntegrateCS, nullptr, 0 );
     pd3dImmediateContext->Dispatch( g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1 );
@@ -801,12 +987,18 @@ void CALLBACK OnD3D11FrameRender( ID3D11Device* pd3dDevice, ID3D11DeviceContext*
     // Clear the render target and depth stencil
     auto pRTV = DXUTGetD3D11RenderTargetView();
     pd3dImmediateContext->ClearRenderTargetView( pRTV, Colors::Black );
+
     auto pDSV = DXUTGetD3D11DepthStencilView();
     pd3dImmediateContext->ClearDepthStencilView( pDSV, D3D11_CLEAR_DEPTH, 1.0, 0 );
+
+	if (!g_EmitWithCS)
+		RenderBall( pd3dImmediateContext, fElapsedTime );
 
     SimulateFluid( pd3dImmediateContext, fElapsedTime );
 
     RenderFluid( pd3dImmediateContext, fElapsedTime );
+
+	g_EmitSlot = 1 - g_EmitSlot;
 
     // Render the HUD
     DXUT_BeginPerfEvent( DXUT_PERFEVENTCOLOR, L"HUD / Stats" );
@@ -836,6 +1028,17 @@ void CALLBACK OnD3D11DestroyDevice( void* pUserContext )
     DXUTGetGlobalResourceCache().OnDestroyDevice();
     SAFE_DELETE( g_pTxtHelper );
 
+	g_BallMesh.Destroy();
+
+	SAFE_RELEASE(g_pBallVertexShader11);
+	SAFE_RELEASE(g_pBallPixelShader11);
+	SAFE_RELEASE(g_pBallLayout11);
+	SAFE_RELEASE(g_pBallSRV11);
+	SAFE_RELEASE(g_pBallSamLinear);
+
+	SAFE_RELEASE(g_pcbBallVSPerObject11);
+	SAFE_RELEASE(g_pcbBallVSPerFrame11);
+
     SAFE_RELEASE( g_pcbSimulationConstants );
     SAFE_RELEASE( g_pcbRenderConstants );
 
@@ -852,9 +1055,12 @@ void CALLBACK OnD3D11DestroyDevice( void* pUserContext )
     SAFE_RELEASE( g_pParticlesSRV );
     SAFE_RELEASE( g_pParticlesUAV );
 
-	SAFE_RELEASE(g_pEmitter);
-	SAFE_RELEASE(g_pEmitterSRV);
-	SAFE_RELEASE(g_pEmitterUAV);
+	for (UINT i = 0; i < 2; ++i)
+	{
+		SAFE_RELEASE(g_pEmitter[i]);
+		SAFE_RELEASE(g_pEmitterSRV[i]);
+		SAFE_RELEASE(g_pEmitterUAV[i]);
+	}
 
     SAFE_RELEASE( g_pSortedParticles );
     SAFE_RELEASE( g_pSortedParticlesSRV );
