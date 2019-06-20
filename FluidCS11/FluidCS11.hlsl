@@ -46,6 +46,9 @@ cbuffer cbSimulationConstants : register( b0 )
     float g_fLapViscosityCoef;
     float g_fWallStiffness;
 
+	uint g_iEmitterWidth;
+	float g_fInitialParticleSpacing;
+
     float4 g_vGravity;
     float4 g_vGridDim;
     float3 g_vPlanes[4];
@@ -242,6 +245,29 @@ void ForceCS_Simple( uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, u
 }
 
 //--------------------------------------------------------------------------------------
+// Emit
+//--------------------------------------------------------------------------------------
+
+[numthreads(SIMULATION_BLOCK_SIZE, 1, 1)]
+void EmitCS(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid : SV_GroupThreadID, uint GI : SV_GroupIndex)
+{
+	const unsigned int P_ID = DTid.x; // Particle ID to operate on
+
+	unsigned int i = P_ID % (g_iEmitterWidth * 2) + g_iEmitterWidth;
+	unsigned int j = P_ID / (g_iEmitterWidth * 2) + g_iEmitterWidth;
+
+	unsigned int x = EmitterRW.IncrementCounter();
+
+	EmitterRW[x].position = float2(g_fInitialParticleSpacing * i, g_fInitialParticleSpacing * j);
+	EmitterRW[x].velocity = float2(0,0);
+
+	if (i < 2 * g_iEmitterWidth && j < 2 * g_iEmitterWidth)
+		EmitterRW[x].ttl = float2(0.5f, g_fParticleMaxTTL);
+	else
+		EmitterRW[x].ttl = float2(0, -1000);
+}
+
+//--------------------------------------------------------------------------------------
 // Integration
 //--------------------------------------------------------------------------------------
 
@@ -283,11 +309,11 @@ void IntegrateCS( uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint
 			ParticlesRW[P_ID].ttl.y -= g_fTimeStep;
 		}
 
-		if (ParticlesRW[P_ID].ttl.y <= 0)
+		if (ParticlesRW[P_ID].ttl.y > -500 && ParticlesRW[P_ID].ttl.y <= 0)
 		{
 			//particle is dead, add new ones if possible
 			unsigned int x = EmitterRW.IncrementCounter();
-			//ParticlesRW[P_ID] = EmitterRW[x];
+			ParticlesRW[P_ID] = EmitterRW[x];
 			//ParticlesRW[P_ID].ttl.y = g_fParticleMaxTTL;
 		}
 	}

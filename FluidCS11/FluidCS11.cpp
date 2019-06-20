@@ -76,6 +76,7 @@ const UINT NUM_PARTICLES_16K = 16 * 1024;
 const UINT NUM_PARTICLES_32K = 32 * 1024;
 const UINT NUM_PARTICLES_64K = 64 * 1024;
 UINT g_iNumParticles = NUM_PARTICLES_16K;
+UINT g_iEmitterWidth = (UINT)sqrt((FLOAT)g_iNumParticles) / 2;
 
 // Particle Properties
 // These will control how the fluid behaves
@@ -137,6 +138,7 @@ ID3D11PixelShader*                  g_pParticlePS = nullptr;
 ID3D11ComputeShader*                g_pDensity_SimpleCS = nullptr;
 ID3D11ComputeShader*                g_pForce_SimpleCS = nullptr;
 ID3D11ComputeShader*                g_pIntegrateCS = nullptr;
+ID3D11ComputeShader*                g_pEmitCS = nullptr;
 
 // Structured Buffers
 ID3D11Buffer*                       g_pParticles = nullptr;
@@ -175,6 +177,9 @@ __declspec(align(16)) struct CBSimulationConstants
     FLOAT fLapViscosityCoef;
     FLOAT fWallStiffness;
     
+	UINT iEmitterWidth;
+	FLOAT fInitialParticleSpacing;
+
     XMFLOAT2A vGravity;
     XMFLOAT4A vGridDim;
 
@@ -429,7 +434,7 @@ HRESULT CreateStructuredBuffer(
 	ID3D11ShaderResourceView** ppSRV, 
 	ID3D11UnorderedAccessView** ppUAV, 
 	const T* pInitialData = nullptr,
-	UINT flag = D3D11_BUFFER_UAV_FLAG_RAW)
+	UINT flag = 0)
 {
     HRESULT hr = S_OK;
 
@@ -458,8 +463,7 @@ HRESULT CreateStructuredBuffer(
     uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
 	uavDesc.Buffer.FirstElement = 0;
     uavDesc.Buffer.NumElements = iNumElements;
-	if (flag != D3D11_BUFFER_UAV_FLAG_RAW)
-		uavDesc.Buffer.Flags = flag;
+	uavDesc.Buffer.Flags = flag;
     V_RETURN( pd3dDevice->CreateUnorderedAccessView( *ppBuffer, &uavDesc, ppUAV ) );
 
     return hr;
@@ -494,37 +498,33 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
     SAFE_RELEASE( g_pParticleDensitySRV );
     SAFE_RELEASE( g_pParticleDensityUAV );
 
-    // Create the initial particle positions
-    // This is only used to populate the GPU buffers on creation
-    const UINT iStartingWidth = (UINT)sqrt( (FLOAT)g_iNumParticles );
-
 	std::ranlux24_base gen_;
 	std::uniform_int_distribution<> random_dis_(0, g_iNumParticles);
-	UINT Total = (iStartingWidth / 2) * (iStartingWidth / 2) / 8;
+	UINT Total = g_iEmitterWidth * g_iEmitterWidth / 8;
 
     auto particles = std::make_unique<Particle[]>(g_iNumParticles);
     ZeroMemory( particles.get(), sizeof(Particle) * g_iNumParticles );
     for ( UINT i = 0 ; i < g_iNumParticles ; i++ )
     {
         // Arrange the particles in a nice square
-        UINT x = i % iStartingWidth;
-        UINT y = i / iStartingWidth;
+        UINT x = i % (g_iEmitterWidth * 2);
+        UINT y = i / (g_iEmitterWidth * 2);
 
-		UINT xx = x + iStartingWidth;
-		UINT yy = y + iStartingWidth;
+		UINT xx = x + (g_iEmitterWidth * 2);
+		UINT yy = y + (g_iEmitterWidth * 2);
 
         particles[i].vPosition = XMFLOAT2(g_fInitialParticleSpacing * (FLOAT)xx, g_fInitialParticleSpacing * (FLOAT)yy );
 
-		if (x < iStartingWidth / 2 && y < iStartingWidth / 2)
+		if (x < g_iEmitterWidth && y < g_iEmitterWidth)
 		{
 			//particles[i].vTTL.x = ((y * iStartingWidth / 2) + x) * g_fParticleGenerateInterval;
-			particles[i].vTTL.x = (random_dis_(gen_) % Total + y * iStartingWidth / 4) * g_fParticleGenerateInterval;
+			particles[i].vTTL.x = (random_dis_(gen_) % Total + y * g_iEmitterWidth / 2) * g_fParticleGenerateInterval;
 			particles[i].vTTL.y = g_fParticleMaxTTL;
 		}
 		else
 		{
 			particles[i].vTTL.x = 0;
-			particles[i].vTTL.y = -1;
+			particles[i].vTTL.y = -1000;
 		}
     }
 
@@ -534,7 +534,7 @@ HRESULT CreateSimulationBuffers( ID3D11Device* pd3dDevice )
     DXUT_SetDebugName( g_pParticlesSRV, "Particles SRV" );
     DXUT_SetDebugName( g_pParticlesUAV, "Particles UAV" );
 
-	V_RETURN(CreateStructuredBuffer< Particle >(pd3dDevice, g_iNumParticles, &g_pEmitter, &g_pEmitterSRV, &g_pEmitterUAV, particles.get()), D3D11_BUFFER_UAV_FLAG_COUNTER);
+	V_RETURN(CreateStructuredBuffer< Particle >(pd3dDevice, g_iNumParticles, &g_pEmitter, &g_pEmitterSRV, &g_pEmitterUAV, particles.get(), D3D11_BUFFER_UAV_FLAG_COUNTER));
 	DXUT_SetDebugName(g_pEmitter, "Emitter");
 	DXUT_SetDebugName(g_pEmitterSRV, "Emitter SRV");
 	DXUT_SetDebugName(g_pEmitterUAV, "Emitter UAV");
@@ -595,6 +595,11 @@ HRESULT CALLBACK OnD3D11CreateDevice( ID3D11Device* pd3dDevice, const DXGI_SURFA
     
     CWaitDlg CompilingShadersDlg;
     CompilingShadersDlg.ShowDialog( L"Compiling Shaders..." );
+
+	V_RETURN(DXUTCompileFromFile(L"FluidCS11.hlsl", nullptr, "EmitCS", CSTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob));
+	V_RETURN(pd3dDevice->CreateComputeShader(pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pEmitCS));
+	SAFE_RELEASE(pBlob);
+	DXUT_SetDebugName(g_pEmitCS, "EmitCS");
 
     V_RETURN( DXUTCompileFromFile( L"FluidCS11.hlsl", nullptr, "IntegrateCS", CSTarget, D3DCOMPILE_ENABLE_STRICTNESS, 0, &pBlob ) );
     V_RETURN( pd3dDevice->CreateComputeShader( pBlob->GetBufferPointer(), pBlob->GetBufferSize(), nullptr, &g_pIntegrateCS ) );
@@ -657,6 +662,11 @@ void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
     pd3dImmediateContext->CSSetConstantBuffers( 0, 1, &g_pcbSimulationConstants );
     pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pParticlesSRV );
 
+	// Emit
+	pd3dImmediateContext->CSSetUnorderedAccessViews(1, 1, &g_pEmitterUAV, &UAVInitialCounts);
+	pd3dImmediateContext->CSSetShader(g_pEmitCS, nullptr, 0);
+	pd3dImmediateContext->Dispatch(g_iNumParticles / SIMULATION_BLOCK_SIZE, 1, 1);
+
     // Density
     pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pParticleDensityUAV, &UAVInitialCounts );
     pd3dImmediateContext->CSSetShader( g_pDensity_SimpleCS, nullptr, 0 );
@@ -699,6 +709,9 @@ void SimulateFluid( ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTim
     pData.fDensityCoef = g_fParticleMass * 315.0f / (64.0f * XM_PI * pow(g_fSmoothlen, 9));
     pData.fGradPressureCoef = g_fParticleMass * -45.0f / (XM_PI * pow(g_fSmoothlen, 6));
     pData.fLapViscosityCoef = g_fParticleMass * g_fViscosity * 45.0f / (XM_PI * pow(g_fSmoothlen, 6));
+
+	pData.iEmitterWidth = g_iEmitterWidth;
+	pData.fInitialParticleSpacing = g_fInitialParticleSpacing;
 
     pData.vGravity = g_vGravity;
     
@@ -830,6 +843,7 @@ void CALLBACK OnD3D11DestroyDevice( void* pUserContext )
     SAFE_RELEASE( g_pParticleGS );
     SAFE_RELEASE( g_pParticlePS );
 
+	SAFE_RELEASE( g_pEmitCS );
     SAFE_RELEASE( g_pIntegrateCS );
     SAFE_RELEASE( g_pDensity_SimpleCS );
     SAFE_RELEASE( g_pForce_SimpleCS );
