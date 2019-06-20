@@ -42,7 +42,8 @@ struct VS_INPUT
 struct VS_OUTPUT
 {
     float4 Position     : SV_POSITION; // vertex position 
-    float2 TextureUV    : TEXCOORD0;   // vertex texture coords 
+    float2 TextureUV    : TEXCOORD0;   // vertex texture coords
+	float2 OriPosition	: TEXCOORD1;
 };
 
 //--------------------------------------------------------------------------------------
@@ -51,9 +52,12 @@ struct VS_OUTPUT
 VS_OUTPUT RenderSceneVS( VS_INPUT input )
 {
     VS_OUTPUT Output;
-    
+    float4 Position = float4(0.6f + input.Position.xyz * 0.25f, input.Position.w);
+
+	Output.OriPosition = Position.xy;
+
     // Transform the position from object space to homogeneous projection space
-    Output.Position = mul( input.Position, g_mWorldViewProjection );
+    Output.Position = mul( Position, g_mWorldViewProjection );
     
     // Just copy the texture coordinate through
     Output.TextureUV = input.TextureUV; 
@@ -72,7 +76,7 @@ float4 RenderScenePS( VS_OUTPUT In ) : SV_TARGET
 	float4 TexColor = g_txDiffuse.Sample(g_samLinear, AdjustUV);
 
 	unsigned int x = EmitterRW.IncrementCounter();
-	EmitterRW[x].position = float2(In.Position.x * g_Other.z, In.Position.y * g_Other.w);
+	EmitterRW[x].position = In.OriPosition; //float2(In.Position.x, In.Position.y);
 	EmitterRW[x].velocity = float2(0, 0);
 	EmitterRW[x].ttl = float2(0.5f, g_Other.y);
 

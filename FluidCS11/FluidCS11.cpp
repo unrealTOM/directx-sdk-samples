@@ -23,7 +23,6 @@
 #include "SDKmisc.h"
 #include "resource.h"
 #include "WaitDlg.h"
-#include "DXUTcamera.h"
 #include "DDSTextureLoader.h"
 #include "SDKMesh.h"
 #include "resource.h"
@@ -125,7 +124,6 @@ CD3DSettingsDlg                     g_D3DSettingsDlg;        // Device settings 
 CDXUTDialog                         g_HUD;                   // manages the 3D   
 CDXUTDialog                         g_SampleUI;              // dialog for sample specific controls
 
-CModelViewerCamera                  g_Camera;               // A model viewing camera
 CDXUTSDKMesh                        g_BallMesh;				    // mesh
 ID3D11VertexShader*                 g_pBallVertexShader11 = NULL;
 ID3D11PixelShader*                  g_pBallPixelShader11 = NULL;
@@ -170,6 +168,7 @@ ID3D11UnorderedAccessView*          g_pParticleForcesUAV = nullptr;
 
 UINT g_EmitSlot = 0;
 BOOL g_EmitWithCS = false;
+XMMATRIX g_mViewProjection;
 
 // Constant Buffer Layout
 #pragma warning(push)
@@ -519,11 +518,6 @@ HRESULT CreateBallResources(ID3D11Device* pd3dDevice)
 	// Load the texture
 	V_RETURN(CreateDDSTextureFromFile(pd3dDevice, L"seafloor.dds", nullptr, &g_pBallSRV11));
 
-	// Setup the camera's view parameters
-	XMVECTORF32 vecEye = {0.0f, 0.0f, -5.0f, 0.0f};
-	XMVECTORF32 vecAt = {0.0f, 0.0f, -0.0f, 0.0f};
-	g_Camera.SetViewParams(vecEye, vecAt);
-
 	return hr;
 }
 
@@ -759,8 +753,7 @@ HRESULT CALLBACK OnD3D11ResizedSwapChain( ID3D11Device* pd3dDevice, IDXGISwapCha
 //--------------------------------------------------------------------------------------
 // GPU Fluid Simulation
 //--------------------------------------------------------------------------------------
-HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, 
-	ID3D11RenderTargetView* pRtv, ID3D11DepthStencilView* pDsv, float fElapsedTime)
+HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime)
 {
 	HRESULT hr;
 
@@ -770,17 +763,11 @@ HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext,
 	s_TotalElapsedTime += fElapsedTime;
 	s_TotalElapsedTime -= (int)s_TotalElapsedTime;
 
-	// Get the projection & view matrix from the camera class
-	XMMATRIX mWorld = g_Camera.GetWorldMatrix();
-	XMMATRIX mView = g_Camera.GetViewMatrix();
-	XMMATRIX mProj = g_Camera.GetProjMatrix();
-	XMMATRIX mWorldViewProjection = mWorld * mView * mProj;
-
 	// Set the constant buffers
 	D3D11_MAPPED_SUBRESOURCE MappedResource;
 	V_RETURN(pd3dImmediateContext->Map(g_pcbBallVSPerObject11, 0, D3D11_MAP_WRITE_DISCARD, 0, &MappedResource));
 	CB_VS_PER_OBJECT* pVSPerObject = (CB_VS_PER_OBJECT*)MappedResource.pData;
-	XMStoreFloat4x4(&pVSPerObject->m_mWorldViewProjection, XMMatrixTranspose(mWorldViewProjection));
+	XMStoreFloat4x4(&pVSPerObject->m_mWorldViewProjection, XMMatrixTranspose( g_mViewProjection ));
 	pVSPerObject->m_Others.x = s_TotalElapsedTime;
 	pVSPerObject->m_Others.y = g_fParticleMaxTTL;
 	pVSPerObject->m_Others.z = g_fMapWidth;
@@ -907,15 +894,10 @@ void SimulateFluid( ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTim
 //--------------------------------------------------------------------------------------
 void RenderFluid( ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime )
 {
-    // Simple orthographic projection to display the entire map
-    XMMATRIX mView = XMMatrixTranslation( -g_fMapWidth / 2.0f, -g_fMapHeight / 2.0f, 0 );
-    XMMATRIX mProjection = XMMatrixOrthographicLH( g_fMapWidth, g_fMapHeight, 0, 1 );
-    XMMATRIX mViewProjection = mView * mProjection;
-
     // Update Constants
     CBRenderConstants pData = {};
 
-    XMStoreFloat4x4( &pData.mViewProjection, XMMatrixTranspose( mViewProjection ) );
+    XMStoreFloat4x4( &pData.mViewProjection, XMMatrixTranspose( g_mViewProjection ) );
     pData.fParticleSize = g_fParticleRenderSize;
 
     pd3dImmediateContext->UpdateSubresource( g_pcbRenderConstants, 0, nullptr, &pData, 0, 0 );
@@ -965,8 +947,14 @@ void CALLBACK OnD3D11FrameRender( ID3D11Device* pd3dDevice, ID3D11DeviceContext*
     auto pDSV = DXUTGetD3D11DepthStencilView();
     pd3dImmediateContext->ClearDepthStencilView( pDSV, D3D11_CLEAR_DEPTH, 1.0, 0 );
 
+	// Simple orthographic projection to display the entire map
+	XMMATRIX mView = XMMatrixTranslation(-g_fMapWidth / 2.0f, -g_fMapHeight / 2.0f, 0);
+	XMMATRIX mProjection = XMMatrixOrthographicLH(g_fMapWidth, g_fMapHeight, 0, 1);
+
+	g_mViewProjection = mView * mProjection;
+
 	if (!g_EmitWithCS)
-		RenderBall( pd3dImmediateContext, pRTV, pDSV, fElapsedTime );
+		RenderBall( pd3dImmediateContext, fElapsedTime );
 
     SimulateFluid( pd3dImmediateContext, fElapsedTime );
 
