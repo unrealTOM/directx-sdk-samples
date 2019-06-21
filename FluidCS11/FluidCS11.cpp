@@ -525,10 +525,12 @@ HRESULT CreateBallResources(ID3D11Device* pd3dDevice)
 	DXUT_SetDebugName(g_pBallBlendState, "Blending");
 
 	// load the mesh
-	V_RETURN(g_BallMesh.Create(pd3dDevice, L"ball.sdkmesh"));
+	//V_RETURN(g_BallMesh.Create(pd3dDevice, L"ball.sdkmesh"));
+	V_RETURN(g_BallMesh.Create(pd3dDevice, L"tiny.sdkmesh"));
 
 	// Load the texture
-	V_RETURN(CreateDDSTextureFromFile(pd3dDevice, L"seafloor.dds", nullptr, &g_pBallSRV11));
+	//V_RETURN(CreateDDSTextureFromFile(pd3dDevice, L"seafloor.dds", nullptr, &g_pBallSRV11));
+	V_RETURN(CreateDDSTextureFromFile(pd3dDevice, L"Tiny_skin.dds", nullptr, &g_pBallSRV11));
 
 	return hr;
 }

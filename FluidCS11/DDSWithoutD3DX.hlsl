@@ -52,7 +52,8 @@ struct VS_OUTPUT
 VS_OUTPUT RenderSceneVS( VS_INPUT input )
 {
     VS_OUTPUT Output;
-    float4 Position = float4(0.6f + input.Position.xyz * 0.25f, input.Position.w);
+    //float4 Position = float4(0.6f + input.Position.xyz * 0.25f, input.Position.w);
+	float4 Position = float4(0.7f + input.Position.xyz * 0.0025f, input.Position.w);
 
 	Output.OriPosition = Position.xy;
 
@@ -87,8 +88,10 @@ float4 RenderScenePS( VS_OUTPUT In ) : SV_TARGET
 	TexColor = float4(1.0f, 0, 0, 1);
 	if (delta > 0.1f)
 	{
-		TexColor.w = 0;
+		TexColor.w = 1.0f - (delta - 0.1f) / 0.2f;
+		if (delta > 0.3f)
+			TexColor.w = 0;
 	}
-
+	
 	return TexColor;
 }
