@@ -125,12 +125,13 @@ CDXUTDialog                         g_HUD;                   // manages the 3D
 CDXUTDialog                         g_SampleUI;              // dialog for sample specific controls
 
 CDXUTSDKMesh                        g_BallMesh;				    // mesh
-ID3D11VertexShader*                 g_pBallVertexShader11 = NULL;
-ID3D11PixelShader*                  g_pBallPixelShader11 = NULL;
-ID3D11InputLayout*                  g_pBallLayout11 = NULL;
-ID3D11ShaderResourceView*           g_pBallSRV11 = NULL;
-ID3D11SamplerState*                 g_pBallSamLinear = NULL;
-ID3D11Buffer*                       g_pcbBallVSPerObject11 = NULL;
+ID3D11VertexShader*                 g_pBallVertexShader11 = nullptr;
+ID3D11PixelShader*                  g_pBallPixelShader11 = nullptr;
+ID3D11InputLayout*                  g_pBallLayout11 = nullptr;
+ID3D11ShaderResourceView*           g_pBallSRV11 = nullptr;
+ID3D11SamplerState*                 g_pBallSamLinear = nullptr;
+ID3D11BlendState*					g_pBallBlendState = nullptr;
+ID3D11Buffer*                       g_pcbBallVSPerObject11 = nullptr;
 
 // Resources
 CDXUTTextHelper*                    g_pTxtHelper = nullptr;
@@ -488,6 +489,7 @@ HRESULT CreateBallResources(ID3D11Device* pd3dDevice)
 	SAFE_RELEASE(g_pBallSamLinear);
 	SAFE_RELEASE(g_pcbBallVSPerObject11);
 	SAFE_RELEASE(g_pBallSRV11);
+	SAFE_RELEASE(g_pBallBlendState);
 
 	// Create state objects
 	D3D11_SAMPLER_DESC samDesc;
@@ -506,10 +508,21 @@ HRESULT CreateBallResources(ID3D11Device* pd3dDevice)
 	cbDesc.Usage = D3D11_USAGE_DYNAMIC;
 	cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
 	cbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-
 	cbDesc.ByteWidth = sizeof(CB_VS_PER_OBJECT);
 	V_RETURN(pd3dDevice->CreateBuffer(&cbDesc, NULL, &g_pcbBallVSPerObject11));
 	DXUT_SetDebugName(g_pcbBallVSPerObject11, "CB_VS_PER_OBJECT");
+
+	D3D11_BLEND_DESC BlendStateDesc = {};
+	BlendStateDesc.RenderTarget[0].BlendEnable = TRUE;
+	BlendStateDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+	BlendStateDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+	BlendStateDesc.RenderTarget[0].DestBlend = D3D11_BLEND_ONE;
+	BlendStateDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+	BlendStateDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO;
+	BlendStateDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+	BlendStateDesc.RenderTarget[0].RenderTargetWriteMask = 0x0F;
+	V_RETURN(pd3dDevice->CreateBlendState(&BlendStateDesc, &g_pBallBlendState));
+	DXUT_SetDebugName(g_pBallBlendState, "Blending");
 
 	// load the mesh
 	V_RETURN(g_BallMesh.Create(pd3dDevice, L"ball.sdkmesh"));
@@ -756,19 +769,31 @@ HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime
 {
 	HRESULT hr;
 
-	UINT EmitInitialCounter = -1;
-	static float s_TotalElapsedTime = 0;
+	UINT EmitInitialCounter = 0;
+	static float s_TotalElapsedTime = 0, s_TotalElapsedTimeFrac = 0, s_LastFireTime = 0;
 
+	BOOL bFireThisFrame = false;
 	s_TotalElapsedTime += fElapsedTime;
-	s_TotalElapsedTime -= (int)s_TotalElapsedTime;
+	s_TotalElapsedTimeFrac = s_TotalElapsedTime - (int)s_TotalElapsedTime;
+	//if (s_TotalElapsedTime > s_LastFireTime - 0.01f)
+	{
+		s_LastFireTime = s_TotalElapsedTime;
+		bFireThisFrame = true;
+	}
+
+	UINT SampleMask0;
+	XMFLOAT4 BlendFactor0;
+	ID3D11BlendState *pBlendState0 = nullptr;
+	pd3dImmediateContext->OMGetBlendState(&pBlendState0, &BlendFactor0.x, &SampleMask0);
 
 	// Set the constant buffers
 	D3D11_MAPPED_SUBRESOURCE MappedResource;
 	V_RETURN(pd3dImmediateContext->Map(g_pcbBallVSPerObject11, 0, D3D11_MAP_WRITE_DISCARD, 0, &MappedResource));
 	CB_VS_PER_OBJECT* pVSPerObject = (CB_VS_PER_OBJECT*)MappedResource.pData;
 	XMStoreFloat4x4(&pVSPerObject->m_mWorldViewProjection, XMMatrixTranspose( g_mViewProjection ));
-	pVSPerObject->m_Others.x = s_TotalElapsedTime;
+	pVSPerObject->m_Others.x = s_TotalElapsedTimeFrac;
 	pVSPerObject->m_Others.y = g_fParticleMaxTTL;
+	pVSPerObject->m_Others.z = (bFireThisFrame ? 1.0f : 0);
 	pd3dImmediateContext->Unmap(g_pcbBallVSPerObject11, 0);
 	pd3dImmediateContext->VSSetConstantBuffers(0, 1, &g_pcbBallVSPerObject11);
 	pd3dImmediateContext->PSSetConstantBuffers(0, 1, &g_pcbBallVSPerObject11);
@@ -782,12 +807,16 @@ HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime
 	pd3dImmediateContext->OMSetRenderTargetsAndUnorderedAccessViews(
 		D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &g_pEmitterUAV[g_EmitSlot], &EmitInitialCounter);
 
+	float bf[] = { 0.f, 0.f, 0.f, 0.f };
+	pd3dImmediateContext->OMSetBlendState(g_pBallBlendState, bf, 0xFFFFFFFF);
+
 	g_BallMesh.Render(pd3dImmediateContext);
 
 	// Reset
 	pd3dImmediateContext->PSSetShaderResources(0, 1, &g_pNullSRV);
 	pd3dImmediateContext->OMSetRenderTargetsAndUnorderedAccessViews(
 		D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, nullptr, 1, 1, &g_pNullUAV, &EmitInitialCounter);
+	pd3dImmediateContext->OMSetBlendState(pBlendState0, &BlendFactor0.x, SampleMask0);
 
 	return hr;
 }
@@ -797,7 +826,7 @@ HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime
 //--------------------------------------------------------------------------------------
 void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
 {
-    UINT UAVInitialCounts = 0, EmitInitialCounter = -1;
+    UINT UAVInitialCounts = 0, EmitInitialCounter = UINT(-1);
 
     // Setup
     pd3dImmediateContext->CSSetConstantBuffers( 0, 1, &g_pcbSimulationConstants );
@@ -837,7 +866,7 @@ void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
 //--------------------------------------------------------------------------------------
 void SimulateFluid( ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime )
 {
-    UINT UAVInitialCounts = 0, EmitInitialCounter = -1;
+    UINT UAVInitialCounts = 0;
 
     // Update per-frame variables
     CBSimulationConstants pData = {};
@@ -879,7 +908,7 @@ void SimulateFluid( ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTim
 
     // Unset
     pd3dImmediateContext->CSSetUnorderedAccessViews( 0, 1, &g_pNullUAV, &UAVInitialCounts );
-	pd3dImmediateContext->CSSetUnorderedAccessViews( 1, 1, &g_pNullUAV, &EmitInitialCounter);
+	pd3dImmediateContext->CSSetUnorderedAccessViews( 1, 1, &g_pNullUAV, &UAVInitialCounts);
 	pd3dImmediateContext->CSSetShaderResources( 0, 1, &g_pNullSRV );
     pd3dImmediateContext->CSSetShaderResources( 1, 1, &g_pNullSRV );
     pd3dImmediateContext->CSSetShaderResources( 2, 1, &g_pNullSRV );
@@ -994,6 +1023,7 @@ void CALLBACK OnD3D11DestroyDevice( void* pUserContext )
 	SAFE_RELEASE(g_pBallLayout11);
 	SAFE_RELEASE(g_pBallSRV11);
 	SAFE_RELEASE(g_pBallSamLinear);
+	SAFE_RELEASE(g_pBallBlendState);
 
 	SAFE_RELEASE(g_pcbBallVSPerObject11);
 

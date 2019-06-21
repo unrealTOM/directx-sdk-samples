@@ -72,15 +72,22 @@ VS_OUTPUT RenderSceneVS( VS_INPUT input )
 float4 RenderScenePS( VS_OUTPUT In ) : SV_TARGET
 { 
 	// Lookup mesh texture and modulate it with diffuse
-	float2 AdjustUV = In.TextureUV + float2(g_Other.x, 0);
+	float2 AdjustUV = In.TextureUV; // + float2(g_Other.x, 0);
 	float4 TexColor = g_txDiffuse.Sample(g_samLinear, AdjustUV);
 
-	if (TexColor.x < 0.5f)
+	float delta = g_Other.x - TexColor.z;
+	if (delta > -0.0001f && delta < 0.0001f && g_Other.z > 0)
 	{
 		unsigned int x = EmitterRW.IncrementCounter();
 		EmitterRW[x].position = In.OriPosition;
 		EmitterRW[x].velocity = float2(0, 0);
-		EmitterRW[x].ttl = float2(0.5f, g_Other.y);
+		EmitterRW[x].ttl = float2(0, g_Other.y);
+	}
+
+	TexColor = float4(1.0f, 0, 0, 1);
+	if (delta > 0.1f)
+	{
+		TexColor.w = 0;
 	}
 
 	return TexColor;
