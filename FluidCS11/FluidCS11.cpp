@@ -17,6 +17,7 @@
 //--------------------------------------------------------------------------------------
 
 #include "DXUT.h"
+#include "DXUTcamera.h"
 #include "DXUTgui.h"
 #include "DXUTmisc.h"
 #include "DXUTsettingsDlg.h"
@@ -120,9 +121,11 @@ ID3D11Buffer* const                 g_pNullBuffer = nullptr;    // Helper to Cle
 UINT                                g_iNullUINT = 0;         // Helper to Clear Buffers
 
 CDXUTDialogResourceManager          g_DialogResourceManager; // manager for shared resources of dialogs
+CModelViewerCamera					g_Camera;               // A model viewing camera
 CD3DSettingsDlg                     g_D3DSettingsDlg;        // Device settings dialog
 CDXUTDialog                         g_HUD;                   // manages the 3D   
 CDXUTDialog                         g_SampleUI;              // dialog for sample specific controls
+XMMATRIX							g_mCenterMesh;
 
 CDXUTSDKMesh                        g_BallMesh;				    // mesh
 ID3D11VertexShader*                 g_pBallVertexShader11 = nullptr;
@@ -205,6 +208,7 @@ __declspec(align(16)) struct CBRenderConstants
 __declspec(align(16)) struct CB_VS_PER_OBJECT
 {
 	XMFLOAT4X4 m_mWorldViewProjection;
+	XMFLOAT4X4 m_mModelMVP;
 	XMFLOAT4A m_Others; //x = m_fElapsedTime, y = m_fParticleMaxTTL
 };
 #pragma warning(pop)
@@ -229,6 +233,7 @@ ID3D11Buffer*                       g_pcbRenderConstants = nullptr;
 // Forward declarations 
 //--------------------------------------------------------------------------------------
 bool CALLBACK ModifyDeviceSettings( DXUTDeviceSettings* pDeviceSettings, void* pUserContext );
+void CALLBACK OnFrameMove(double fTime, float fElapsedTime, void* pUserContext);
 LRESULT CALLBACK MsgProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, bool* pbNoFurtherProcessing,
                           void* pUserContext );
 void CALLBACK OnGUIEvent( UINT nEvent, int nControlID, CDXUTControl* pControl, void* pUserContext );
@@ -265,6 +270,7 @@ int WINAPI wWinMain( _In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
     // Set DXUT callbacks
     DXUTSetCallbackDeviceChanging( ModifyDeviceSettings );
     DXUTSetCallbackMsgProc( MsgProc );
+	DXUTSetCallbackFrameMove(OnFrameMove);
 
     DXUTSetCallbackD3D11DeviceAcceptable( IsD3D11DeviceAcceptable );
     DXUTSetCallbackD3D11DeviceCreated( OnD3D11CreateDevice );
@@ -317,6 +323,14 @@ void InitApp()
     g_SampleUI.GetComboBox( IDC_GRAVITY )->AddItem( L"Gravity Right", (void*)&GRAVITY_RIGHT );
 }
 
+//--------------------------------------------------------------------------------------
+// Handle updates to the scene.  This is called regardless of which D3D API is used
+//--------------------------------------------------------------------------------------
+void CALLBACK OnFrameMove(double fTime, float fElapsedTime, void* pUserContext)
+{
+	// Update the camera's position based on user input 
+	g_Camera.FrameMove(fElapsedTime);
+}
 
 //--------------------------------------------------------------------------------------
 // Called right before creating a D3D device, allowing the app to modify the device settings as needed
@@ -368,6 +382,9 @@ LRESULT CALLBACK MsgProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, bo
     *pbNoFurtherProcessing = g_SampleUI.MsgProc( hWnd, uMsg, wParam, lParam );
     if( *pbNoFurtherProcessing )
         return 0;
+
+	// Pass all remaining windows messages to camera so it can respond to user input
+	g_Camera.HandleMessages(hWnd, uMsg, wParam, lParam);
 
     return 0;
 }
@@ -741,6 +758,20 @@ HRESULT CALLBACK OnD3D11CreateDevice( ID3D11Device* pd3dDevice, const DXGI_SURFA
     DXUT_SetDebugName( g_pcbSimulationConstants, "Simluation" );
     DXUT_SetDebugName( g_pcbRenderConstants, "Render" );
 
+	// Setup the camera's view parameters
+	XMFLOAT3 vCenter(0.25767413f, -28.503521f, 111.00689f);
+	FLOAT fObjectRadius = 378.15607f;
+
+	g_mCenterMesh = XMMatrixTranslation(-vCenter.x, -vCenter.y, -vCenter.z);
+	XMMATRIX m = XMMatrixRotationY(XM_PI);
+	g_mCenterMesh *= m;
+	m = XMMatrixRotationX(XM_PI / 2.0f);
+	g_mCenterMesh *= m;
+
+	static const XMVECTORF32 s_vecEye = { 0.0f, 0.0f, -100.0f, 0.0f };
+	g_Camera.SetViewParams(s_vecEye, g_XMZero);
+	g_Camera.SetRadius(fObjectRadius * 3.0f, fObjectRadius * 0.5f, fObjectRadius * 10.0f);
+
     return S_OK;
 }
 
@@ -755,6 +786,12 @@ HRESULT CALLBACK OnD3D11ResizedSwapChain( ID3D11Device* pd3dDevice, IDXGISwapCha
 
     V_RETURN( g_DialogResourceManager.OnD3D11ResizedSwapChain( pd3dDevice, pBackBufferSurfaceDesc ) );
     V_RETURN( g_D3DSettingsDlg.OnD3D11ResizedSwapChain( pd3dDevice, pBackBufferSurfaceDesc ) );
+
+	// Setup the camera's projection parameters
+	float fAspectRatio = pBackBufferSurfaceDesc->Width / (FLOAT)pBackBufferSurfaceDesc->Height;
+	g_Camera.SetProjParams(XM_PI / 4, fAspectRatio, 2.0f, 4000.0f);
+	g_Camera.SetWindow(pBackBufferSurfaceDesc->Width, pBackBufferSurfaceDesc->Height);
+	g_Camera.SetButtonMasks(MOUSE_MIDDLE_BUTTON, MOUSE_WHEEL, MOUSE_LEFT_BUTTON);
 
     g_HUD.SetLocation( pBackBufferSurfaceDesc->Width - 170, 0 );
     g_HUD.SetSize( 170, 170 );
@@ -774,28 +811,24 @@ HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime
 	UINT EmitInitialCounter = 0;
 	static float s_TotalElapsedTime = 0, s_TotalElapsedTimeFrac = 0, s_LastFireTime = 0;
 
-	BOOL bFireThisFrame = false;
-	s_TotalElapsedTime += fElapsedTime;
+	s_TotalElapsedTime += fElapsedTime / 8;
 	s_TotalElapsedTimeFrac = s_TotalElapsedTime - (int)s_TotalElapsedTime;
-	//if (s_TotalElapsedTime > s_LastFireTime - 0.01f)
-	{
-		s_LastFireTime = s_TotalElapsedTime;
-		bFireThisFrame = true;
-	}
 
 	UINT SampleMask0;
 	XMFLOAT4 BlendFactor0;
 	ID3D11BlendState *pBlendState0 = nullptr;
 	pd3dImmediateContext->OMGetBlendState(&pBlendState0, &BlendFactor0.x, &SampleMask0);
 
+	XMMATRIX Rotation = g_mCenterMesh * g_Camera.GetWorldMatrix() * g_Camera.GetViewMatrix() * g_Camera.GetProjMatrix() * XMMatrixInverse(nullptr, g_mViewProjection);
+
 	// Set the constant buffers
 	D3D11_MAPPED_SUBRESOURCE MappedResource;
 	V_RETURN(pd3dImmediateContext->Map(g_pcbBallVSPerObject11, 0, D3D11_MAP_WRITE_DISCARD, 0, &MappedResource));
 	CB_VS_PER_OBJECT* pVSPerObject = (CB_VS_PER_OBJECT*)MappedResource.pData;
 	XMStoreFloat4x4(&pVSPerObject->m_mWorldViewProjection, XMMatrixTranspose( g_mViewProjection ));
+	XMStoreFloat4x4(&pVSPerObject->m_mModelMVP, XMMatrixTranspose(Rotation));
 	pVSPerObject->m_Others.x = s_TotalElapsedTimeFrac;
 	pVSPerObject->m_Others.y = g_fParticleMaxTTL;
-	pVSPerObject->m_Others.z = (bFireThisFrame ? 1.0f : 0);
 	pd3dImmediateContext->Unmap(g_pcbBallVSPerObject11, 0);
 	pd3dImmediateContext->VSSetConstantBuffers(0, 1, &g_pcbBallVSPerObject11);
 	pd3dImmediateContext->PSSetConstantBuffers(0, 1, &g_pcbBallVSPerObject11);
@@ -828,7 +861,7 @@ HRESULT RenderBall(ID3D11DeviceContext* pd3dImmediateContext, float fElapsedTime
 //--------------------------------------------------------------------------------------
 void SimulateFluid_Simple( ID3D11DeviceContext* pd3dImmediateContext )
 {
-    UINT UAVInitialCounts = 0, EmitInitialCounter = UINT(-1);
+    UINT UAVInitialCounts = 0, EmitInitialCounter = 0;
 
     // Setup
     pd3dImmediateContext->CSSetConstantBuffers( 0, 1, &g_pcbSimulationConstants );
@@ -1004,7 +1037,7 @@ void CALLBACK OnD3D11FrameRender( ID3D11Device* pd3dDevice, ID3D11DeviceContext*
 //--------------------------------------------------------------------------------------
 void CALLBACK OnD3D11ReleasingSwapChain( void* pUserContext )
 {
-    g_DialogResourceManager.OnD3D11ReleasingSwapChain();
+	g_DialogResourceManager.OnD3D11ReleasingSwapChain();
 }
 
 

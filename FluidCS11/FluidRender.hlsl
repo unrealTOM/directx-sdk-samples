@@ -46,7 +46,7 @@ struct GSParticleOut
 //--------------------------------------------------------------------------------------
 
 static const float4 Rainbow[5] = {
-    float4(1, 0, 0, 1), // red
+    float4(0.2, 0.2, 0.2, 1), // red
     float4(1, 1, 0, 1), // orange
     float4(0, 1, 0, 1), // green
     float4(0, 1, 1, 1), // teal

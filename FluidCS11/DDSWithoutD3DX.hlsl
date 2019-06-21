@@ -19,7 +19,8 @@ struct Particle
 cbuffer cbPerObject : register( b0 )
 {
     matrix  g_mWorldViewProjection  : packoffset( c0 );
-	float4  g_Other					: packoffset( c4 );
+	matrix  g_mModelMVP				: packoffset( c4 );
+	float4  g_Other					: packoffset( c8 );
 }
 
 RWStructuredBuffer<Particle> EmitterRW : register(u1);
@@ -53,9 +54,10 @@ VS_OUTPUT RenderSceneVS( VS_INPUT input )
 {
     VS_OUTPUT Output;
     //float4 Position = float4(0.6f + input.Position.xyz * 0.25f, input.Position.w);
-	float4 Position = float4(0.7f + input.Position.xyz * 0.0025f, input.Position.w);
+	//float4 Position = float4(0.7f + input.Position.xyz * 0.0025f, input.Position.w);
+	float4 Position = mul( input.Position, g_mModelMVP );
 
-	Output.OriPosition = Position.xy;
+	Output.OriPosition = Position.xy / Position.w;
 
     // Transform the position from object space to homogeneous projection space
     Output.Position = mul( Position, g_mWorldViewProjection );
@@ -77,7 +79,7 @@ float4 RenderScenePS( VS_OUTPUT In ) : SV_TARGET
 	float4 TexColor = g_txDiffuse.Sample(g_samLinear, AdjustUV);
 
 	float delta = g_Other.x - TexColor.z;
-	if (delta > -0.0001f && delta < 0.0001f && g_Other.z > 0)
+	if (delta > -0.0001f && delta < 0.0001f)
 	{
 		unsigned int x = EmitterRW.IncrementCounter();
 		EmitterRW[x].position = In.OriPosition;
@@ -85,13 +87,9 @@ float4 RenderScenePS( VS_OUTPUT In ) : SV_TARGET
 		EmitterRW[x].ttl = float2(0, g_Other.y);
 	}
 
-	TexColor = float4(1.0f, 0, 0, 1);
-	if (delta > 0.1f)
-	{
-		TexColor.w = 1.0f - (delta - 0.1f) / 0.2f;
-		if (delta > 0.3f)
-			TexColor.w = 0;
-	}
+	//TexColor = float4(1.0f, 0, 0, 1);
+	if (delta > 0)
+		TexColor.w = 0;
 	
 	return TexColor;
 }
